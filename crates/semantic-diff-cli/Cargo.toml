@@ -1,0 +1,29 @@
+[package]
+name = "semantic-diff-cli"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Command-line interface for semantic code diff analysis"
+
+[[bin]]
+name = "semantic-diff"
+path = "src/main.rs"
+
+[dependencies]
+# 内部依赖
+semantic-diff-core = { path = "../semantic-diff-core" }
+
+# 命令行接口
+clap = { workspace = true, features = ["derive"] }
+
+# 日志记录
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+# 错误处理
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
