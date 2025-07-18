@@ -28,10 +28,10 @@ tracing-subscriber = "0.3"
 rayon = "1.10"
 
 # 序列化
-serde = { version = "1.0", features = ["derive"] }
+serde = "1.0"
 
 # 命令行接口
-clap = { version = "4.5", features = ["derive"] }
+clap = "4.5"
 
 # 文件系统操作
 walkdir = "2.5"

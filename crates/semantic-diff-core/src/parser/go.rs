@@ -89,6 +89,7 @@ pub struct GoVariableDefinition {
 #[derive(Debug)]
 pub enum GoDeclaration {
     Function(GoFunctionInfo),
+    Method(GoFunctionInfo),
     Type(GoTypeDefinition),
     Constant(GoConstantDefinition),
     Variable(GoVariableDefinition),
@@ -98,6 +99,7 @@ impl Declaration for GoDeclaration {
     fn name(&self) -> &str {
         match self {
             GoDeclaration::Function(f) => &f.name,
+            GoDeclaration::Method(m) => &m.name,
             GoDeclaration::Type(t) => &t.name,
             GoDeclaration::Constant(c) => &c.name,
             GoDeclaration::Variable(v) => &v.name,
@@ -107,6 +109,7 @@ impl Declaration for GoDeclaration {
     fn declaration_type(&self) -> &str {
         match self {
             GoDeclaration::Function(_) => "function",
+            GoDeclaration::Method(_) => "method",
             GoDeclaration::Type(_) => "type",
             GoDeclaration::Constant(_) => "constant",
             GoDeclaration::Variable(_) => "variable",
@@ -116,6 +119,7 @@ impl Declaration for GoDeclaration {
     fn start_line(&self) -> u32 {
         match self {
             GoDeclaration::Function(f) => f.start_line,
+            GoDeclaration::Method(m) => m.start_line,
             GoDeclaration::Type(_t) => {
                 // 对于类型定义，我们需要从定义中解析行号，这里先返回 0
                 // 在实际实现中应该从 AST 中获取
@@ -129,6 +133,7 @@ impl Declaration for GoDeclaration {
     fn end_line(&self) -> u32 {
         match self {
             GoDeclaration::Function(f) => f.end_line,
+            GoDeclaration::Method(m) => m.end_line,
             GoDeclaration::Type(_) => {
                 // 对于类型定义，我们需要从定义中解析行号，这里先返回 0
                 // 在实际实现中应该从 AST 中获取
@@ -142,6 +147,7 @@ impl Declaration for GoDeclaration {
     fn file_path(&self) -> &PathBuf {
         match self {
             GoDeclaration::Function(f) => &f.file_path,
+            GoDeclaration::Method(m) => &m.file_path,
             GoDeclaration::Type(t) => &t.file_path,
             GoDeclaration::Constant(c) => &c.file_path,
             GoDeclaration::Variable(v) => &v.file_path,
