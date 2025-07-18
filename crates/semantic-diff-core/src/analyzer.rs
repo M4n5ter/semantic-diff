@@ -8,6 +8,7 @@ use crate::parser::{
     GoFunctionInfo, GoTypeDefinition, LanguageParser, ParserFactory, SourceFile, SupportedLanguage,
     common::{CstNavigator, LanguageSpecificInfo},
 };
+use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
 
@@ -21,12 +22,16 @@ pub struct SourceAnalyzer {
 }
 
 /// 依赖关系解析器
-pub struct DependencyResolver;
+pub struct DependencyResolver {
+    /// 项目的模块路径（从go.mod中获取）
+    project_module_path: Option<String>,
+}
 
 /// 类型分析器
 pub struct TypeAnalyzer;
 
 /// 依赖关系信息
+#[derive(Debug, Clone)]
 pub struct Dependency {
     pub name: String,
     pub dependency_type: DependencyType,
@@ -34,6 +39,7 @@ pub struct Dependency {
 }
 
 /// 依赖类型
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DependencyType {
     Function,
     Type,
@@ -42,12 +48,14 @@ pub enum DependencyType {
 }
 
 /// 类型引用
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TypeReference {
     pub name: String,
     pub package: Option<String>,
 }
 
 /// 函数调用
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FunctionCall {
     pub name: String,
     pub receiver: Option<String>,
@@ -63,28 +71,581 @@ impl Default for DependencyResolver {
 impl DependencyResolver {
     /// 创建新的依赖解析器
     pub fn new() -> Self {
-        // TODO: 在任务 6 中实现
-        todo!("Implementation in task 6")
+        Self {
+            project_module_path: None,
+        }
     }
 
-    /// 解析类型引用
+    /// 创建带有项目模块路径的依赖解析器
+    pub fn new_with_project_path(project_module_path: String) -> Self {
+        Self {
+            project_module_path: Some(project_module_path),
+        }
+    }
+
+    /// 从项目根目录的go.mod文件中读取模块路径
+    pub fn from_project_root<P: AsRef<std::path::Path>>(project_root: P) -> Result<Self> {
+        let go_mod_path = project_root.as_ref().join("go.mod");
+
+        if go_mod_path.exists() {
+            let content =
+                std::fs::read_to_string(&go_mod_path).map_err(SemanticDiffError::IoError)?;
+
+            if let Some(module_path) = Self::extract_module_path_from_go_mod(&content) {
+                Ok(Self::new_with_project_path(module_path))
+            } else {
+                Ok(Self::new())
+            }
+        } else {
+            Ok(Self::new())
+        }
+    }
+
+    /// 从go.mod内容中提取模块路径
+    fn extract_module_path_from_go_mod(content: &str) -> Option<String> {
+        for line in content.lines() {
+            let line = line.trim();
+            if line.starts_with("module ") {
+                let module_path = line.strip_prefix("module ")?.trim();
+                return Some(module_path.to_string());
+            }
+        }
+        None
+    }
+
+    /// 解析类型引用，查找项目内部类型定义
+    ///
+    /// 在提供的源文件列表中查找指定类型的定义
     pub fn resolve_type(
         &self,
-        _type_ref: &TypeReference,
-        _source_files: &[SourceFile],
+        type_ref: &TypeReference,
+        source_files: &[SourceFile],
     ) -> Option<GoTypeDefinition> {
-        // TODO: 在任务 6 中实现
-        todo!("Implementation in task 6")
+        // 遍历所有源文件查找类型定义
+        for source_file in source_files {
+            if let Some(type_def) = self.find_type_in_file(type_ref, source_file) {
+                return Some(type_def);
+            }
+        }
+        None
     }
 
-    /// 解析函数调用
+    /// 解析函数调用，查找项目内部函数定义
+    ///
+    /// 在提供的源文件列表中查找指定函数的定义
     pub fn resolve_function(
         &self,
-        _func_call: &FunctionCall,
-        _source_files: &[SourceFile],
+        func_call: &FunctionCall,
+        source_files: &[SourceFile],
     ) -> Option<GoFunctionInfo> {
-        // TODO: 在任务 6 中实现
-        todo!("Implementation in task 6")
+        // 遍历所有源文件查找函数定义
+        for source_file in source_files {
+            if let Some(func_info) = self.find_function_in_file(func_call, source_file) {
+                return Some(func_info);
+            }
+        }
+        None
+    }
+
+    /// 检查导入是否为外部依赖
+    ///
+    /// 区分项目内部代码和第三方库代码
+    pub fn is_external_dependency(&self, import: &crate::parser::Import) -> bool {
+        // 首先检查是否为项目内部包
+        if self.is_project_internal_package(&import.path) {
+            return false;
+        }
+
+        // 然后检查是否为标准库
+        if self.is_standard_library(&import.path) {
+            return true;
+        }
+
+        // 检查是否为第三方库
+        if self.is_third_party_library(&import.path) {
+            return true;
+        }
+
+        // 对于无法确定的包，如果没有项目模块路径信息，采用保守策略
+        // 将其视为外部依赖以避免误判
+        if self.project_module_path.is_none() {
+            // 只有明确的相对路径才认为是内部的
+            !import.path.starts_with("./") && !import.path.starts_with("../")
+        } else {
+            // 有项目模块路径时，不以项目路径开头的都是外部的
+            true
+        }
+    }
+
+    /// 在指定的源文件列表中查找类型定义
+    ///
+    /// 根据类型名称查找对应的类型定义
+    pub fn find_type_definition(
+        &self,
+        type_name: &str,
+        source_files: &[SourceFile],
+    ) -> Option<GoTypeDefinition> {
+        let type_ref = TypeReference {
+            name: type_name.to_string(),
+            package: None,
+        };
+        self.resolve_type(&type_ref, source_files)
+    }
+
+    /// 查找函数定义
+    ///
+    /// 根据函数名称查找对应的函数定义
+    pub fn find_function_definition(
+        &self,
+        func_name: &str,
+        source_files: &[SourceFile],
+    ) -> Option<GoFunctionInfo> {
+        let func_call = FunctionCall {
+            name: func_name.to_string(),
+            receiver: None,
+            package: None,
+        };
+        self.resolve_function(&func_call, source_files)
+    }
+
+    /// 提取函数中的所有依赖
+    ///
+    /// 分析函数体，提取其中使用的类型和函数调用
+    pub fn extract_function_dependencies(
+        &self,
+        function: &GoFunctionInfo,
+        source_files: &[SourceFile],
+    ) -> Vec<Dependency> {
+        let mut dependencies = Vec::new();
+
+        // 从函数参数中提取类型引用
+        for param in &function.parameters {
+            let type_refs = self.parse_type_string(&param.param_type.name);
+            for type_ref in type_refs {
+                if let Some(type_def) = self.resolve_type(&type_ref, source_files) {
+                    dependencies.push(Dependency {
+                        name: type_def.name.clone(),
+                        dependency_type: DependencyType::Type,
+                        file_path: type_def.file_path.clone(),
+                    });
+                }
+            }
+        }
+
+        // 从返回值类型中提取类型引用
+        for return_type in &function.return_types {
+            let type_refs = self.parse_type_string(&return_type.name);
+            for type_ref in type_refs {
+                if let Some(type_def) = self.resolve_type(&type_ref, source_files) {
+                    dependencies.push(Dependency {
+                        name: type_def.name.clone(),
+                        dependency_type: DependencyType::Type,
+                        file_path: type_def.file_path.clone(),
+                    });
+                }
+            }
+        }
+
+        // 从函数体中提取类型引用
+        let type_refs = self.extract_type_references_from_code(&function.body);
+        for type_ref in type_refs {
+            if let Some(type_def) = self.resolve_type(&type_ref, source_files) {
+                dependencies.push(Dependency {
+                    name: type_def.name.clone(),
+                    dependency_type: DependencyType::Type,
+                    file_path: type_def.file_path.clone(),
+                });
+            }
+        }
+
+        // 从函数体中提取函数调用
+        let func_calls = self.extract_function_calls_from_code(&function.body);
+        for func_call in func_calls {
+            if let Some(func_info) = self.resolve_function(&func_call, source_files) {
+                dependencies.push(Dependency {
+                    name: func_info.name.clone(),
+                    dependency_type: DependencyType::Function,
+                    file_path: func_info.file_path.clone(),
+                });
+            }
+        }
+
+        // 去重
+        dependencies.sort_by(|a, b| a.name.cmp(&b.name));
+        dependencies.dedup_by(|a, b| a.name == b.name && a.dependency_type == b.dependency_type);
+
+        dependencies
+    }
+
+    /// 过滤外部依赖
+    ///
+    /// 从依赖列表中移除第三方库的依赖，只保留项目内部依赖
+    pub fn filter_internal_dependencies(&self, dependencies: &[Dependency]) -> Vec<Dependency> {
+        dependencies
+            .iter()
+            .filter(|dep| self.is_internal_dependency(dep))
+            .cloned()
+            .collect()
+    }
+
+    /// 在单个文件中查找类型定义
+    fn find_type_in_file(
+        &self,
+        type_ref: &TypeReference,
+        source_file: &SourceFile,
+    ) -> Option<GoTypeDefinition> {
+        // 获取 Go 语言特定信息
+        let go_info = source_file
+            .language_specific
+            .as_any()
+            .downcast_ref::<crate::parser::GoLanguageInfo>()?;
+
+        // 在声明中查找匹配的类型
+        for declaration in go_info.declarations() {
+            if let Some(crate::parser::GoDeclaration::Type(type_def)) = declaration
+                .as_any()
+                .downcast_ref::<crate::parser::GoDeclaration>(
+            ) {
+                if self.type_matches(type_ref, type_def, go_info) {
+                    return Some(type_def.clone());
+                }
+            }
+        }
+
+        None
+    }
+
+    /// 在单个文件中查找函数定义
+    fn find_function_in_file(
+        &self,
+        func_call: &FunctionCall,
+        source_file: &SourceFile,
+    ) -> Option<GoFunctionInfo> {
+        // 获取 Go 语言特定信息
+        let go_info = source_file
+            .language_specific
+            .as_any()
+            .downcast_ref::<crate::parser::GoLanguageInfo>()?;
+
+        // 在声明中查找匹配的函数或方法
+        for declaration in go_info.declarations() {
+            if let Some(go_decl) = declaration
+                .as_any()
+                .downcast_ref::<crate::parser::GoDeclaration>()
+            {
+                match go_decl {
+                    crate::parser::GoDeclaration::Function(func_info) => {
+                        if self.function_matches(func_call, func_info, go_info) {
+                            return Some(func_info.clone());
+                        }
+                    }
+                    crate::parser::GoDeclaration::Method(method_info) => {
+                        if self.method_matches(func_call, method_info, go_info) {
+                            return Some(method_info.clone());
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        None
+    }
+
+    /// 检查类型是否匹配
+    fn type_matches(
+        &self,
+        type_ref: &TypeReference,
+        type_def: &GoTypeDefinition,
+        go_info: &crate::parser::GoLanguageInfo,
+    ) -> bool {
+        // 简单名称匹配
+        if type_ref.name == type_def.name {
+            // 如果没有指定包名，或者包名匹配
+            if type_ref.package.is_none()
+                || type_ref.package.as_deref() == Some(go_info.package_name())
+            {
+                return true;
+            }
+        }
+
+        // 处理包限定的类型名称
+        if let Some(package) = &type_ref.package {
+            // 检查是否有对应的导入别名
+            for import in go_info.imports() {
+                if let Some(alias) = &import.alias {
+                    if alias == package && type_ref.name == type_def.name {
+                        return true;
+                    }
+                } else {
+                    // 使用包路径的最后一部分作为包名
+                    let package_name = import.path.split('/').next_back().unwrap_or(&import.path);
+                    if package_name == package && type_ref.name == type_def.name {
+                        return true;
+                    }
+                }
+            }
+        }
+
+        false
+    }
+
+    /// 检查函数是否匹配
+    fn function_matches(
+        &self,
+        func_call: &FunctionCall,
+        func_info: &GoFunctionInfo,
+        go_info: &crate::parser::GoLanguageInfo,
+    ) -> bool {
+        // 简单名称匹配
+        if func_call.name == func_info.name {
+            // 如果没有指定包名，或者包名匹配
+            if func_call.package.is_none()
+                || func_call.package.as_deref() == Some(go_info.package_name())
+            {
+                return true;
+            }
+        }
+
+        // 处理包限定的函数名称
+        if let Some(package) = &func_call.package {
+            for import in go_info.imports() {
+                if let Some(alias) = &import.alias {
+                    if alias == package && func_call.name == func_info.name {
+                        return true;
+                    }
+                } else {
+                    let package_name = import.path.split('/').next_back().unwrap_or(&import.path);
+                    if package_name == package && func_call.name == func_info.name {
+                        return true;
+                    }
+                }
+            }
+        }
+
+        false
+    }
+
+    /// 检查方法是否匹配
+    fn method_matches(
+        &self,
+        func_call: &FunctionCall,
+        method_info: &GoFunctionInfo,
+        _go_info: &crate::parser::GoLanguageInfo,
+    ) -> bool {
+        // 方法匹配需要考虑接收者
+        if func_call.name == method_info.name {
+            // 如果指定了接收者，检查接收者类型是否匹配
+            if let Some(receiver_name) = &func_call.receiver {
+                if let Some(receiver_info) = &method_info.receiver {
+                    return receiver_name == &receiver_info.type_name;
+                }
+            } else {
+                // 如果没有指定接收者，也可能匹配（在同一个包内调用）
+                return true;
+            }
+        }
+
+        false
+    }
+
+    /// 检查是否为标准库
+    fn is_standard_library(&self, import_path: &str) -> bool {
+        // Go 标准库的常见包
+        const STANDARD_PACKAGES: &[&str] = &[
+            "fmt",
+            "os",
+            "io",
+            "net",
+            "http",
+            "strings",
+            "strconv",
+            "time",
+            "context",
+            "encoding/json",
+            "net/http",
+            "database/sql",
+            "crypto",
+            "math",
+            "sort",
+            "bufio",
+            "bytes",
+            "errors",
+            "flag",
+            "log",
+            "path",
+            "regexp",
+            "sync",
+            "testing",
+            "unsafe",
+            "reflect",
+            "runtime",
+            "syscall",
+        ];
+
+        // 检查是否为标准库包
+        STANDARD_PACKAGES.contains(&import_path) ||
+        // 或者是标准库的子包
+        STANDARD_PACKAGES.iter().any(|&std_pkg| import_path.starts_with(&format!("{std_pkg}/")))
+    }
+
+    /// 检查是否为项目内部包
+    fn is_project_internal_package(&self, import_path: &str) -> bool {
+        if let Some(project_module_path) = &self.project_module_path {
+            // 如果导入路径以项目模块路径开头，则认为是项目内部包
+            import_path.starts_with(project_module_path)
+        } else {
+            // 如果没有项目模块路径信息，使用保守的启发式方法
+            // 只有明确的相对路径导入才认为是项目内部的
+            import_path.starts_with("./") || import_path.starts_with("../")
+        }
+    }
+
+    /// 检查是否为第三方库
+    fn is_third_party_library(&self, import_path: &str) -> bool {
+        // 第三方库通常包含域名
+        import_path.starts_with("github.com/")
+            || import_path.starts_with("gitlab.com/")
+            || import_path.starts_with("bitbucket.org/")
+            || import_path.starts_with("golang.org/")
+            || import_path.starts_with("google.golang.org/")
+            || import_path.starts_with("go.uber.org/")
+            || (import_path.contains('.')
+                && (import_path.contains(".com/")
+                    || import_path.contains(".org/")
+                    || import_path.contains(".net/")))
+    }
+
+    /// 检查是否为项目内部依赖
+    fn is_internal_dependency(&self, dependency: &Dependency) -> bool {
+        // 简单的启发式方法：如果文件路径不包含 vendor 或者第三方库的特征，认为是内部依赖
+        let path_str = dependency.file_path.to_string_lossy();
+        !path_str.contains("vendor/")
+            && !path_str.contains("go/pkg/mod/")
+            && !path_str.contains(".cache/")
+    }
+
+    /// 从代码中提取类型引用
+    fn extract_type_references_from_code(&self, code: &str) -> Vec<TypeReference> {
+        let mut type_refs = Vec::new();
+
+        // 简单的正则表达式匹配（实际实现中应该使用语法树分析）
+        // 这里提供一个基础实现，实际应该通过 tree-sitter 分析
+
+        // 匹配类型声明模式，如 var x Type, func() Type, *Type 等
+        let patterns = [
+            r"\b([A-Z][a-zA-Z0-9_]*)\s*\{",        // 结构体字面量
+            r"\*([A-Z][a-zA-Z0-9_]*)\b",           // 指针类型
+            r"\[\]([A-Z][a-zA-Z0-9_]*)\b",         // 切片类型
+            r"var\s+\w+\s+([A-Z][a-zA-Z0-9_]*)\b", // 变量声明
+            r":\s*([A-Z][a-zA-Z0-9_]*)\b",         // 短变量声明
+        ];
+
+        for pattern in &patterns {
+            if let Ok(re) = regex::Regex::new(pattern) {
+                for cap in re.captures_iter(code) {
+                    if let Some(type_name) = cap.get(1) {
+                        let type_ref = TypeReference {
+                            name: type_name.as_str().to_string(),
+                            package: None,
+                        };
+                        if !type_refs
+                            .iter()
+                            .any(|t: &TypeReference| t.name == type_ref.name)
+                        {
+                            type_refs.push(type_ref);
+                        }
+                    }
+                }
+            }
+        }
+
+        type_refs
+    }
+
+    /// 从代码中提取函数调用
+    fn extract_function_calls_from_code(&self, code: &str) -> Vec<FunctionCall> {
+        let mut func_calls = Vec::new();
+
+        // 简单的正则表达式匹配函数调用
+        let patterns = [
+            r"([a-zA-Z_][a-zA-Z0-9_]*)\s*\(", // 简单函数调用
+            r"([a-zA-Z_][a-zA-Z0-9_]*)\.([a-zA-Z_][a-zA-Z0-9_]*)\s*\(", // 方法调用
+        ];
+
+        // 匹配简单函数调用
+        if let Ok(re) = regex::Regex::new(patterns[0]) {
+            for cap in re.captures_iter(code) {
+                if let Some(func_name) = cap.get(1) {
+                    let func_call = FunctionCall {
+                        name: func_name.as_str().to_string(),
+                        receiver: None,
+                        package: None,
+                    };
+                    if !func_calls
+                        .iter()
+                        .any(|f: &FunctionCall| f.name == func_call.name)
+                    {
+                        func_calls.push(func_call);
+                    }
+                }
+            }
+        }
+
+        // 匹配方法调用
+        if let Ok(re) = regex::Regex::new(patterns[1]) {
+            for cap in re.captures_iter(code) {
+                if let (Some(receiver), Some(method)) = (cap.get(1), cap.get(2)) {
+                    let func_call = FunctionCall {
+                        name: method.as_str().to_string(),
+                        receiver: Some(receiver.as_str().to_string()),
+                        package: None,
+                    };
+                    if !func_calls.iter().any(|f: &FunctionCall| {
+                        f.name == func_call.name && f.receiver == func_call.receiver
+                    }) {
+                        func_calls.push(func_call);
+                    }
+                }
+            }
+        }
+
+        func_calls
+    }
+
+    /// 解析类型字符串，提取其中的类型引用
+    fn parse_type_string(&self, type_str: &str) -> Vec<TypeReference> {
+        let mut type_refs = Vec::new();
+
+        // 清理类型字符串，移除指针、切片等修饰符
+        let clean_type = type_str
+            .trim()
+            .trim_start_matches("user ") // 移除变量名
+            .trim_start_matches('*') // 移除指针标记
+            .trim_start_matches("[]") // 移除切片标记
+            .trim();
+
+        // 检查是否包含包名
+        if let Some(dot_pos) = clean_type.find('.') {
+            let package = clean_type[..dot_pos].to_string();
+            let type_name = clean_type[dot_pos + 1..].to_string();
+
+            // 只有当类型名以大写字母开头时才认为是用户定义的类型
+            if type_name.chars().next().is_some_and(|c| c.is_uppercase()) {
+                type_refs.push(TypeReference {
+                    name: type_name,
+                    package: Some(package),
+                });
+            }
+        } else if clean_type.chars().next().is_some_and(|c| c.is_uppercase()) {
+            // 没有包名的类型
+            type_refs.push(TypeReference {
+                name: clean_type.to_string(),
+                package: None,
+            });
+        }
+
+        type_refs
     }
 }
 
@@ -662,8 +1223,255 @@ impl Default for TypeAnalyzer {
 impl TypeAnalyzer {
     /// 创建新的类型分析器
     pub fn new() -> Self {
-        // TODO: 在任务 8 中实现
-        todo!("Implementation in task 8")
+        Self
+    }
+
+    /// 分析类型的依赖关系
+    ///
+    /// 提取类型定义中引用的其他类型
+    pub fn analyze_type_dependencies(
+        &self,
+        type_def: &GoTypeDefinition,
+        source_files: &[SourceFile],
+    ) -> Vec<Dependency> {
+        self.analyze_type_dependencies_recursive(type_def, source_files, &mut HashSet::new())
+    }
+
+    /// 递归分析类型的依赖关系，包括间接依赖
+    ///
+    /// 使用visited集合避免循环依赖导致的无限递归
+    fn analyze_type_dependencies_recursive(
+        &self,
+        type_def: &GoTypeDefinition,
+        source_files: &[SourceFile],
+        visited: &mut HashSet<String>,
+    ) -> Vec<Dependency> {
+        let mut dependencies = Vec::new();
+
+        // 避免循环依赖
+        if visited.contains(&type_def.name) {
+            return dependencies;
+        }
+        visited.insert(type_def.name.clone());
+
+        // 从类型定义中提取类型引用
+        let type_refs = self.extract_type_references_from_definition(&type_def.definition);
+
+        for type_ref in type_refs {
+            // 查找类型定义
+            let resolver = DependencyResolver::new();
+            if let Some(dep_type_def) = resolver.resolve_type(&type_ref, source_files) {
+                // 添加直接依赖
+                dependencies.push(Dependency {
+                    name: dep_type_def.name.clone(),
+                    dependency_type: DependencyType::Type,
+                    file_path: dep_type_def.file_path.clone(),
+                });
+
+                // 递归分析间接依赖
+                let indirect_deps =
+                    self.analyze_type_dependencies_recursive(&dep_type_def, source_files, visited);
+                for indirect_dep in indirect_deps {
+                    // 避免重复添加
+                    if !dependencies.iter().any(|d| d.name == indirect_dep.name) {
+                        dependencies.push(indirect_dep);
+                    }
+                }
+            }
+        }
+
+        // 从visited集合中移除当前类型，允许在其他路径中再次访问
+        visited.remove(&type_def.name);
+
+        dependencies
+    }
+
+    /// 分析结构体字段的类型
+    ///
+    /// 提取结构体中所有字段的类型信息
+    pub fn analyze_struct_fields(&self, struct_def: &str) -> Vec<TypeReference> {
+        let mut field_types = Vec::new();
+
+        // 简单的字段类型提取（实际应该使用语法树分析）
+        let lines: Vec<&str> = struct_def.lines().collect();
+        let mut in_struct_body = false;
+
+        for line in lines {
+            let trimmed = line.trim();
+
+            if trimmed.contains("struct {") {
+                in_struct_body = true;
+                continue;
+            }
+
+            if trimmed == "}" && in_struct_body {
+                break;
+            }
+
+            if in_struct_body && !trimmed.is_empty() && !trimmed.starts_with("//") {
+                // 解析字段行，格式如: FieldName Type `tag`
+                let parts: Vec<&str> = trimmed.split_whitespace().collect();
+                if parts.len() >= 2 {
+                    let field_type = parts[1];
+                    let type_ref = self.parse_type_reference(field_type);
+
+                    // 过滤掉内置类型和已存在的类型
+                    if !self.is_builtin_type(&type_ref.name)
+                        && !field_types
+                            .iter()
+                            .any(|t: &TypeReference| t.name == type_ref.name)
+                    {
+                        field_types.push(type_ref);
+                    }
+                }
+            }
+        }
+
+        field_types
+    }
+
+    /// 分析接口方法的类型
+    ///
+    /// 提取接口中所有方法的参数和返回值类型
+    pub fn analyze_interface_methods(&self, interface_def: &str) -> Vec<TypeReference> {
+        let mut method_types = Vec::new();
+
+        let lines: Vec<&str> = interface_def.lines().collect();
+        let mut in_interface_body = false;
+
+        for line in lines {
+            let trimmed = line.trim();
+
+            if trimmed.contains("interface {") {
+                in_interface_body = true;
+                continue;
+            }
+
+            if trimmed == "}" && in_interface_body {
+                break;
+            }
+
+            if in_interface_body && !trimmed.is_empty() && !trimmed.starts_with("//") {
+                // 解析方法签名中的类型
+                let types = self.extract_types_from_method_signature(trimmed);
+                for type_ref in types {
+                    if !method_types
+                        .iter()
+                        .any(|t: &TypeReference| t.name == type_ref.name)
+                    {
+                        method_types.push(type_ref);
+                    }
+                }
+            }
+        }
+
+        method_types
+    }
+
+    /// 从类型定义中提取类型引用
+    fn extract_type_references_from_definition(&self, definition: &str) -> Vec<TypeReference> {
+        let mut type_refs = Vec::new();
+
+        // 根据类型定义的种类进行不同的处理
+        if definition.contains("struct {") {
+            type_refs.extend(self.analyze_struct_fields(definition));
+        } else if definition.contains("interface {") {
+            type_refs.extend(self.analyze_interface_methods(definition));
+        } else {
+            // 类型别名，直接提取右侧的类型
+            if let Some(alias_type) = self.extract_alias_type(definition) {
+                type_refs.push(alias_type);
+            }
+        }
+
+        type_refs
+    }
+
+    /// 解析类型引用字符串
+    fn parse_type_reference(&self, type_str: &str) -> TypeReference {
+        // 处理各种类型格式
+        let clean_type = type_str
+            .trim_start_matches('*') // 移除指针标记
+            .trim_start_matches("[]") // 移除切片标记
+            .trim_start_matches("map[")
+            .trim_end_matches(']');
+
+        // 检查是否包含包名
+        if let Some(dot_pos) = clean_type.find('.') {
+            let package = clean_type[..dot_pos].to_string();
+            let type_name = clean_type[dot_pos + 1..].to_string();
+            TypeReference {
+                name: type_name,
+                package: Some(package),
+            }
+        } else {
+            TypeReference {
+                name: clean_type.to_string(),
+                package: None,
+            }
+        }
+    }
+
+    /// 检查是否为Go内置类型
+    fn is_builtin_type(&self, type_name: &str) -> bool {
+        const BUILTIN_TYPES: &[&str] = &[
+            "bool",
+            "byte",
+            "complex64",
+            "complex128",
+            "error",
+            "float32",
+            "float64",
+            "int",
+            "int8",
+            "int16",
+            "int32",
+            "int64",
+            "rune",
+            "string",
+            "uint",
+            "uint8",
+            "uint16",
+            "uint32",
+            "uint64",
+            "uintptr",
+        ];
+        BUILTIN_TYPES.contains(&type_name)
+    }
+
+    /// 从方法签名中提取类型
+    fn extract_types_from_method_signature(&self, signature: &str) -> Vec<TypeReference> {
+        let mut types = Vec::new();
+
+        // 简单的类型提取，匹配参数和返回值中的类型
+        if let Ok(re) = regex::Regex::new(r"\b([A-Z][a-zA-Z0-9_]*)\b") {
+            for cap in re.captures_iter(signature) {
+                if let Some(type_match) = cap.get(1) {
+                    let type_ref = self.parse_type_reference(type_match.as_str());
+                    if !types
+                        .iter()
+                        .any(|t: &TypeReference| t.name == type_ref.name)
+                    {
+                        types.push(type_ref);
+                    }
+                }
+            }
+        }
+
+        types
+    }
+
+    /// 提取类型别名的目标类型
+    fn extract_alias_type(&self, definition: &str) -> Option<TypeReference> {
+        // 匹配 type Alias = TargetType 的模式
+        if let Ok(re) = regex::Regex::new(r"type\s+\w+\s*=\s*(.+)") {
+            if let Some(cap) = re.captures(definition) {
+                if let Some(target_type) = cap.get(1) {
+                    return Some(self.parse_type_reference(target_type.as_str().trim()));
+                }
+            }
+        }
+        None
     }
 }
 
@@ -901,6 +1709,336 @@ func multiply(x, y int) int {
         // 应该找到 multiply 函数
         assert_eq!(changed_functions2.len(), 1);
         assert_eq!(changed_functions2[0].name, "multiply");
+    }
+
+    #[test]
+    fn test_dependency_resolver_creation() {
+        let resolver = DependencyResolver::new();
+        let _default_resolver = DependencyResolver::default();
+
+        // 测试基本功能可用性
+        let type_ref = TypeReference {
+            name: "TestType".to_string(),
+            package: None,
+        };
+
+        let func_call = FunctionCall {
+            name: "testFunc".to_string(),
+            receiver: None,
+            package: None,
+        };
+
+        // 空的源文件列表应该返回 None
+        assert!(resolver.resolve_type(&type_ref, &[]).is_none());
+        assert!(resolver.resolve_function(&func_call, &[]).is_none());
+    }
+
+    #[test]
+    fn test_is_external_dependency() {
+        let resolver = DependencyResolver::new();
+
+        // 测试标准库
+        let std_import = crate::parser::Import {
+            path: "fmt".to_string(),
+            alias: None,
+        };
+        assert!(resolver.is_external_dependency(&std_import));
+
+        let http_import = crate::parser::Import {
+            path: "net/http".to_string(),
+            alias: None,
+        };
+        assert!(resolver.is_external_dependency(&http_import));
+
+        // 测试第三方库
+        let github_import = crate::parser::Import {
+            path: "github.com/user/repo".to_string(),
+            alias: None,
+        };
+        assert!(resolver.is_external_dependency(&github_import));
+
+        // 测试项目内部包（相对路径）
+        let internal_import = crate::parser::Import {
+            path: "./internal/utils".to_string(),
+            alias: None,
+        };
+        assert!(!resolver.is_external_dependency(&internal_import));
+
+        // 注意：没有项目模块路径时，非相对路径的包会被当作外部依赖处理
+        let relative_import = crate::parser::Import {
+            path: "myproject/internal".to_string(),
+            alias: None,
+        };
+        assert!(resolver.is_external_dependency(&relative_import));
+    }
+
+    #[test]
+    fn test_is_external_dependency_with_project_path() {
+        // 测试带有项目模块路径的解析器
+        let resolver =
+            DependencyResolver::new_with_project_path("github.com/M4n5ter/examplePkg".to_string());
+
+        // 测试项目内部包
+        let project_internal = crate::parser::Import {
+            path: "github.com/M4n5ter/examplePkg/internal/utils".to_string(),
+            alias: None,
+        };
+        assert!(!resolver.is_external_dependency(&project_internal));
+
+        let project_subpackage = crate::parser::Import {
+            path: "github.com/M4n5ter/examplePkg/api/v1".to_string(),
+            alias: None,
+        };
+        assert!(!resolver.is_external_dependency(&project_subpackage));
+
+        // 测试第三方库（即使有相似的前缀）
+        let third_party = crate::parser::Import {
+            path: "github.com/M4n5ter/otherPkg".to_string(),
+            alias: None,
+        };
+        assert!(resolver.is_external_dependency(&third_party));
+
+        let another_third_party = crate::parser::Import {
+            path: "github.com/other/repo".to_string(),
+            alias: None,
+        };
+        assert!(resolver.is_external_dependency(&another_third_party));
+
+        // 测试标准库
+        let std_import = crate::parser::Import {
+            path: "fmt".to_string(),
+            alias: None,
+        };
+        assert!(resolver.is_external_dependency(&std_import));
+    }
+
+    #[test]
+    fn test_extract_module_path_from_go_mod() {
+        let go_mod_content = r#"module github.com/M4n5ter/examplePkg
+
+go 1.21
+
+require (
+    github.com/stretchr/testify v1.8.4
+)
+"#;
+
+        let module_path = DependencyResolver::extract_module_path_from_go_mod(go_mod_content);
+        assert_eq!(
+            module_path,
+            Some("github.com/M4n5ter/examplePkg".to_string())
+        );
+
+        // 测试没有module声明的情况
+        let invalid_content = r#"go 1.21
+
+require (
+    github.com/stretchr/testify v1.8.4
+)
+"#;
+        let module_path = DependencyResolver::extract_module_path_from_go_mod(invalid_content);
+        assert_eq!(module_path, None);
+
+        // 测试带有注释的module声明
+        let commented_content = r#"// This is a comment
+module github.com/example/project
+
+go 1.21
+"#;
+        let module_path = DependencyResolver::extract_module_path_from_go_mod(commented_content);
+        assert_eq!(module_path, Some("github.com/example/project".to_string()));
+    }
+
+    #[test]
+    fn test_is_project_internal_package() {
+        // 测试带有项目路径的解析器
+        let resolver =
+            DependencyResolver::new_with_project_path("github.com/M4n5ter/examplePkg".to_string());
+
+        assert!(resolver.is_project_internal_package("github.com/M4n5ter/examplePkg"));
+        assert!(resolver.is_project_internal_package("github.com/M4n5ter/examplePkg/internal"));
+        assert!(resolver.is_project_internal_package("github.com/M4n5ter/examplePkg/api/v1"));
+        assert!(!resolver.is_project_internal_package("github.com/M4n5ter/otherPkg"));
+        assert!(!resolver.is_project_internal_package("github.com/other/repo"));
+
+        // 测试没有项目路径的解析器
+        let resolver_no_path = DependencyResolver::new();
+        assert!(resolver_no_path.is_project_internal_package("./internal"));
+        assert!(resolver_no_path.is_project_internal_package("../utils"));
+        assert!(!resolver_no_path.is_project_internal_package("localpackage")); // 保守策略：不确定的包当作外部处理
+        assert!(!resolver_no_path.is_project_internal_package("github.com/user/repo"));
+    }
+
+    #[test]
+    fn test_extract_type_references_from_code() {
+        let resolver = DependencyResolver::new();
+
+        let code = r#"
+        var user User
+        var users []User
+        var userPtr *User
+        config := Config{Port: 8080}
+        var mapping map[string]Handler
+        "#;
+
+        let type_refs = resolver.extract_type_references_from_code(code);
+
+        // 应该找到 User, Config, Handler 等类型
+        assert!(!type_refs.is_empty());
+
+        let type_names: Vec<&str> = type_refs.iter().map(|t| t.name.as_str()).collect();
+        assert!(type_names.contains(&"User"));
+        assert!(type_names.contains(&"Config"));
+    }
+
+    #[test]
+    fn test_extract_function_calls_from_code() {
+        let resolver = DependencyResolver::new();
+
+        let code = r#"
+        fmt.Println("hello")
+        result := add(1, 2)
+        server.Start()
+        user.GetName()
+        "#;
+
+        let func_calls = resolver.extract_function_calls_from_code(code);
+
+        // 应该找到函数调用
+        assert!(!func_calls.is_empty());
+
+        let func_names: Vec<&str> = func_calls.iter().map(|f| f.name.as_str()).collect();
+        assert!(func_names.contains(&"Println") || func_names.contains(&"add"));
+    }
+
+    #[test]
+    fn test_filter_internal_dependencies() {
+        let resolver = DependencyResolver::new();
+
+        let dependencies = vec![
+            Dependency {
+                name: "InternalType".to_string(),
+                dependency_type: DependencyType::Type,
+                file_path: PathBuf::from("internal/types.go"),
+            },
+            Dependency {
+                name: "VendorType".to_string(),
+                dependency_type: DependencyType::Type,
+                file_path: PathBuf::from("vendor/github.com/user/repo/types.go"),
+            },
+            Dependency {
+                name: "LocalFunc".to_string(),
+                dependency_type: DependencyType::Function,
+                file_path: PathBuf::from("utils/helper.go"),
+            },
+        ];
+
+        let internal_deps = resolver.filter_internal_dependencies(&dependencies);
+
+        // 应该过滤掉 vendor 目录下的依赖
+        assert_eq!(internal_deps.len(), 2);
+        assert!(
+            internal_deps
+                .iter()
+                .all(|d| !d.file_path.to_string_lossy().contains("vendor"))
+        );
+    }
+
+    #[test]
+    fn test_type_analyzer_creation() {
+        let analyzer = TypeAnalyzer::new();
+        let _default_analyzer = TypeAnalyzer;
+
+        // 测试基本功能
+        let struct_def = r#"
+        type User struct {
+            Name    string
+            Age     int
+            Address *Address
+        }
+        "#;
+
+        let field_types = analyzer.analyze_struct_fields(struct_def);
+        assert!(!field_types.is_empty());
+
+        let type_names: Vec<&str> = field_types.iter().map(|t| t.name.as_str()).collect();
+        assert!(type_names.contains(&"Address"));
+    }
+
+    #[test]
+    fn test_analyze_struct_fields() {
+        let analyzer = TypeAnalyzer::new();
+
+        let struct_def = r#"
+        type Person struct {
+            Name     string    `json:"name"`
+            Age      int       `json:"age"`
+            Address  *Address  `json:"address"`
+            Tags     []string  `json:"tags"`
+            Config   Config    `json:"config"`
+        }
+        "#;
+
+        let field_types = analyzer.analyze_struct_fields(struct_def);
+
+        // 应该找到 Address 和 Config 类型
+        assert!(!field_types.is_empty());
+
+        let type_names: Vec<&str> = field_types.iter().map(|t| t.name.as_str()).collect();
+        assert!(type_names.contains(&"Address"));
+        assert!(type_names.contains(&"Config"));
+
+        // 基本类型不应该被包含
+        assert!(!type_names.contains(&"string"));
+        assert!(!type_names.contains(&"int"));
+    }
+
+    #[test]
+    fn test_analyze_interface_methods() {
+        let analyzer = TypeAnalyzer::new();
+
+        let interface_def = r#"
+        type Handler interface {
+            Handle(request Request) Response
+            Validate(data Data) error
+            Process(input Input, output Output) Status
+        }
+        "#;
+
+        let method_types = analyzer.analyze_interface_methods(interface_def);
+
+        // 应该找到方法签名中的类型
+        assert!(!method_types.is_empty());
+
+        let type_names: Vec<&str> = method_types.iter().map(|t| t.name.as_str()).collect();
+        assert!(type_names.contains(&"Request"));
+        assert!(type_names.contains(&"Response"));
+        assert!(type_names.contains(&"Data"));
+    }
+
+    #[test]
+    fn test_parse_type_reference() {
+        let analyzer = TypeAnalyzer::new();
+
+        // 测试简单类型
+        let simple_type = analyzer.parse_type_reference("User");
+        assert_eq!(simple_type.name, "User");
+        assert_eq!(simple_type.package, None);
+
+        // 测试指针类型
+        let pointer_type = analyzer.parse_type_reference("*User");
+        assert_eq!(pointer_type.name, "User");
+        assert_eq!(pointer_type.package, None);
+
+        // 测试切片类型
+        let slice_type = analyzer.parse_type_reference("[]User");
+        assert_eq!(slice_type.name, "User");
+        assert_eq!(slice_type.package, None);
+
+        // 测试包限定类型
+        let qualified_type = analyzer.parse_type_reference("http.Request");
+        assert_eq!(qualified_type.name, "Request");
+        assert_eq!(qualified_type.package, Some("http".to_string()));
     }
 
     #[test]
@@ -1382,5 +2520,76 @@ func (c *Calculator) Calculate(op string, a, b int) int {
         let function_names: Vec<&str> = changed_functions.iter().map(|f| f.name.as_str()).collect();
         assert!(function_names.contains(&"Add"));
         assert!(function_names.contains(&"Calculate"));
+    }
+
+    #[test]
+    fn test_dependency_resolver_from_project_root() {
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+
+        // 创建 go.mod 文件
+        let go_mod_content = r#"module github.com/M4n5ter/examplePkg
+
+go 1.21
+
+require (
+    github.com/stretchr/testify v1.8.4
+    github.com/other/library v1.0.0
+)
+"#;
+
+        fs::write(temp_dir.path().join("go.mod"), go_mod_content).expect("Failed to write go.mod");
+
+        // 从项目根目录创建解析器
+        let resolver = DependencyResolver::from_project_root(temp_dir.path())
+            .expect("Failed to create resolver from project root");
+
+        // 测试项目内部包识别
+        let internal_import = crate::parser::Import {
+            path: "github.com/M4n5ter/examplePkg/internal/utils".to_string(),
+            alias: None,
+        };
+        assert!(!resolver.is_external_dependency(&internal_import));
+
+        // 测试第三方库识别
+        let external_import = crate::parser::Import {
+            path: "github.com/stretchr/testify".to_string(),
+            alias: None,
+        };
+        assert!(resolver.is_external_dependency(&external_import));
+
+        let other_external = crate::parser::Import {
+            path: "github.com/other/library".to_string(),
+            alias: None,
+        };
+        assert!(resolver.is_external_dependency(&other_external));
+
+        // 测试标准库
+        let std_import = crate::parser::Import {
+            path: "fmt".to_string(),
+            alias: None,
+        };
+        assert!(resolver.is_external_dependency(&std_import));
+    }
+
+    #[test]
+    fn test_dependency_resolver_from_project_root_no_go_mod() {
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+
+        // 不创建 go.mod 文件
+        let resolver = DependencyResolver::from_project_root(temp_dir.path())
+            .expect("Failed to create resolver from project root");
+
+        // 应该回退到默认行为
+        let import = crate::parser::Import {
+            path: "github.com/user/repo".to_string(),
+            alias: None,
+        };
+        assert!(resolver.is_external_dependency(&import));
+
+        let relative_import = crate::parser::Import {
+            path: "./internal".to_string(),
+            alias: None,
+        };
+        assert!(!resolver.is_external_dependency(&relative_import));
     }
 }

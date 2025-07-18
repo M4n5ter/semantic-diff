@@ -30,6 +30,9 @@ serde = { workspace = true, features = ["derive"] }
 # 文件系统操作
 walkdir = { workspace = true }
 
+# 正则表达式
+regex = { workspace = true }
+
 [dev-dependencies]
 criterion = { workspace = true }
 tempfile = { workspace = true }

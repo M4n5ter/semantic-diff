@@ -2069,6 +2069,7 @@ dependencies = [
  "gix",
  "pretty_assertions",
  "rayon",
+ "regex",
  "serde",
  "tempfile",
  "thiserror",

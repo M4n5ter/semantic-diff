@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use tree_sitter::{Node, Parser, Point, Tree};
 
 /// Go 语言函数信息
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct GoFunctionInfo {
     pub name: String,
     pub receiver: Option<GoReceiverInfo>,
@@ -21,7 +21,7 @@ pub struct GoFunctionInfo {
 }
 
 /// Go 语言接收者信息（方法的接收者）
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct GoReceiverInfo {
     pub name: String,
     pub type_name: String,
@@ -29,14 +29,14 @@ pub struct GoReceiverInfo {
 }
 
 /// Go 语言参数信息
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct GoParameter {
     pub name: String,
     pub param_type: GoType,
 }
 
 /// Go 语言类型信息
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct GoType {
     pub name: String,
     pub is_pointer: bool,
@@ -44,7 +44,7 @@ pub struct GoType {
 }
 
 /// Go 语言类型定义
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct GoTypeDefinition {
     pub name: String,
     pub kind: GoTypeKind,
@@ -54,7 +54,7 @@ pub struct GoTypeDefinition {
 }
 
 /// Go 语言类型种类
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum GoTypeKind {
     Struct,
     Interface,
@@ -64,7 +64,7 @@ pub enum GoTypeKind {
 }
 
 /// Go 语言常量定义
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct GoConstantDefinition {
     pub name: String,
     pub value: String,
@@ -75,7 +75,7 @@ pub struct GoConstantDefinition {
 }
 
 /// Go 语言变量定义
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct GoVariableDefinition {
     pub name: String,
     pub var_type: Option<GoType>,
@@ -86,7 +86,7 @@ pub struct GoVariableDefinition {
 }
 
 /// Go 语言声明枚举
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum GoDeclaration {
     Function(GoFunctionInfo),
     Method(GoFunctionInfo),
