@@ -189,12 +189,10 @@ impl GoLanguageInfo {
     /// 查找指定名称的函数
     pub fn find_function(&self, name: &str) -> Option<&GoFunctionInfo> {
         self.declarations.iter().find_map(|decl| {
-            if let Some(go_decl) = decl.as_any().downcast_ref::<GoDeclaration>() {
-                if let GoDeclaration::Function(func) = go_decl {
-                    if func.name == name { Some(func) } else { None }
-                } else {
-                    None
-                }
+            if let Some(GoDeclaration::Function(func)) =
+                decl.as_any().downcast_ref::<GoDeclaration>()
+            {
+                if func.name == name { Some(func) } else { None }
             } else {
                 None
             }
@@ -204,13 +202,11 @@ impl GoLanguageInfo {
     /// 查找指定名称的类型定义
     pub fn find_type(&self, name: &str) -> Option<&GoTypeDefinition> {
         self.declarations.iter().find_map(|decl| {
-            if let Some(go_decl) = decl.as_any().downcast_ref::<GoDeclaration>() {
-                if let GoDeclaration::Type(type_def) = go_decl {
-                    if type_def.name == name {
-                        Some(type_def)
-                    } else {
-                        None
-                    }
+            if let Some(GoDeclaration::Type(type_def)) =
+                decl.as_any().downcast_ref::<GoDeclaration>()
+            {
+                if type_def.name == name {
+                    Some(type_def)
                 } else {
                     None
                 }
@@ -262,14 +258,14 @@ impl GoParser {
     }
 
     /// 递归查找包含指定位置的最小节点
-    fn find_node_at_point<'a>(&self, node: Node<'a>, point: Point) -> Option<Node<'a>> {
-        if !node.start_position().le(&point) || !point.le(&node.end_position()) {
+    fn find_node_at_point<'a>(node: Node<'a>, point: Point) -> Option<Node<'a>> {
+        if node.start_position() > point || point > node.end_position() {
             return None;
         }
 
         // 查找最小的包含该位置的子节点
         for child in node.children(&mut node.walk()) {
-            if let Some(found) = self.find_node_at_point(child, point) {
+            if let Some(found) = Self::find_node_at_point(child, point) {
                 return Some(found);
             }
         }
@@ -280,7 +276,6 @@ impl GoParser {
 
     /// 递归遍历语法树并收集节点类型的辅助方法
     fn walk_tree_recursive_collect(
-        &self,
         cursor: &mut tree_sitter::TreeCursor,
         node_kinds: &mut Vec<String>,
     ) {
@@ -288,7 +283,7 @@ impl GoParser {
 
         if cursor.goto_first_child() {
             loop {
-                self.walk_tree_recursive_collect(cursor, node_kinds);
+                Self::walk_tree_recursive_collect(cursor, node_kinds);
                 if !cursor.goto_next_sibling() {
                     break;
                 }
@@ -315,7 +310,7 @@ impl LanguageParser for GoParser {
     ) -> Option<Node<'a>> {
         let point = Point::new(line as usize, column as usize);
         let root = tree.root_node();
-        self.find_node_at_point(root, point)
+        Self::find_node_at_point(root, point)
     }
 
     /// 获取节点的文本内容
@@ -327,7 +322,7 @@ impl LanguageParser for GoParser {
     fn walk_tree_collect(&self, root: Node) -> Vec<String> {
         let mut node_kinds = Vec::new();
         let mut cursor = root.walk();
-        self.walk_tree_recursive_collect(&mut cursor, &mut node_kinds);
+        Self::walk_tree_recursive_collect(&mut cursor, &mut node_kinds);
         node_kinds
     }
 
