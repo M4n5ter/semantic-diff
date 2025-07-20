@@ -67,7 +67,7 @@ impl ParserFactory {
 }
 
 /// 通用导入声明
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Import {
     pub path: String,
     pub alias: Option<String>,

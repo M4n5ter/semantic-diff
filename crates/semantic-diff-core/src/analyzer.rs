@@ -311,7 +311,6 @@ impl DependencyResolver {
                 }
             }
         }
-
         None
     }
 
@@ -526,7 +525,7 @@ impl DependencyResolver {
     }
 
     /// 从代码中提取类型引用
-    fn extract_type_references_from_code(&self, code: &str) -> Vec<TypeReference> {
+    pub fn extract_type_references_from_code(&self, code: &str) -> Vec<TypeReference> {
         let mut type_refs = Vec::new();
 
         // 简单的正则表达式匹配（实际实现中应该使用语法树分析）
