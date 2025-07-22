@@ -33,6 +33,9 @@ walkdir = { workspace = true }
 # 正则表达式
 regex = { workspace = true }
 
+# 时间处理
+chrono = { workspace = true }
+
 [dev-dependencies]
 criterion = { workspace = true }
 tempfile = { workspace = true }

@@ -39,6 +39,9 @@ walkdir = "2.5"
 # 正则表达式
 regex = "1.11"
 
+# 时间处理
+chrono = "0.4"
+
 # 测试工具
 tempfile = "3.20"
 criterion = "0.6"

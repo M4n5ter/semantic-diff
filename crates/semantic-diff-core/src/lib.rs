@@ -6,6 +6,7 @@
 pub mod analyzer;
 pub mod error;
 pub mod extractor;
+pub mod formatter;
 pub mod generator;
 pub mod git;
 pub mod parser;
@@ -14,6 +15,10 @@ pub mod parser;
 pub use analyzer::{DependencyResolver, TypeAnalyzer};
 pub use error::{Result, SemanticDiffError};
 pub use extractor::{SemanticContext, SemanticContextExtractor};
+pub use formatter::{
+    BlockTitleStyle, ColorTheme, FormattedOutput, FormatterConfig, OutputMetadata, OutputRenderer,
+    SyntaxHighlighter,
+};
 pub use generator::{CodeSlice, CodeSliceGenerator, HighlightStyle, OutputFormat};
 pub use git::{ChangeType, DiffHunk, FileChange, GitDiffParser};
 // 导出多语言解析器架构
@@ -22,15 +27,3 @@ pub use parser::{
     GoParser, GoReceiverInfo, GoType, GoTypeDefinition, GoTypeKind, GoVariableDefinition, Import,
     LanguageParser, LanguageSpecificInfo, ParserFactory, SourceFile, SupportedLanguage,
 };
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_basic_structure() {
-        // 基础结构测试，确保模块可以正确导入
-        let _error = SemanticDiffError::ConfigError("test".to_string());
-        // 测试错误类型可以正确创建
-    }
-}

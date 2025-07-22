@@ -42,6 +42,7 @@ pub struct DiffLine {
 }
 
 /// 差异行类型
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DiffLineType {
     Context,
     Added,
