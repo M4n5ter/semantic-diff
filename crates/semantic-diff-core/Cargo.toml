@@ -36,6 +36,9 @@ regex = { workspace = true }
 # 时间处理
 chrono = { workspace = true }
 
+# 文本差异算法
+imara-diff = { workspace = true }
+
 [dev-dependencies]
 criterion = { workspace = true }
 tempfile = { workspace = true }

@@ -70,12 +70,17 @@ fn create_test_diff_hunk() -> DiffHunk {
             DiffLine {
                 content: "    return nil".to_string(),
                 line_type: DiffLineType::Removed,
+                old_line_number: Some(10),
+                new_line_number: None,
             },
             DiffLine {
                 content: "    return fmt.Errorf(\"test error\")".to_string(),
                 line_type: DiffLineType::Added,
+                old_line_number: None,
+                new_line_number: Some(10),
             },
         ],
+        context_lines: 3,
     }
 }
 

@@ -1667,12 +1667,17 @@ func multiply(x, y int) int {
                 DiffLine {
                     content: "    x := 42".to_string(),
                     line_type: DiffLineType::Context,
+                    old_line_number: Some(4),
+                    new_line_number: Some(4),
                 },
                 DiffLine {
                     content: "    y := 24".to_string(),
                     line_type: DiffLineType::Added,
+                    old_line_number: None,
+                    new_line_number: Some(5),
                 },
             ],
+            context_lines: 3,
         }];
 
         let changed_functions = analyzer
@@ -1693,12 +1698,17 @@ func multiply(x, y int) int {
                 DiffLine {
                     content: "    result := x * y".to_string(),
                     line_type: DiffLineType::Added,
+                    old_line_number: None,
+                    new_line_number: Some(13),
                 },
                 DiffLine {
                     content: "    return result".to_string(),
                     line_type: DiffLineType::Context,
+                    old_line_number: Some(14),
+                    new_line_number: Some(14),
                 },
             ],
+            context_lines: 3,
         }];
 
         let changed_functions2 = analyzer
@@ -2078,7 +2088,10 @@ func add(a, b int) int {
                 lines: vec![DiffLine {
                     content: "    x := 42".to_string(),
                     line_type: DiffLineType::Added,
+                    old_line_number: None,
+                    new_line_number: Some(4),
                 }],
+                context_lines: 3,
             },
             DiffHunk {
                 old_start: 12,
@@ -2088,7 +2101,10 @@ func add(a, b int) int {
                 lines: vec![DiffLine {
                     content: "    return a + b".to_string(),
                     line_type: DiffLineType::Added,
+                    old_line_number: None,
+                    new_line_number: Some(12),
                 }],
+                context_lines: 3,
             },
         ];
 
@@ -2135,7 +2151,10 @@ func main() {
                 lines: vec![DiffLine {
                     content: "    x := 42".to_string(),
                     line_type: DiffLineType::Added,
+                    old_line_number: None,
+                    new_line_number: Some(4),
                 }],
+                context_lines: 3,
             },
             DiffHunk {
                 old_start: 6,
@@ -2145,7 +2164,10 @@ func main() {
                 lines: vec![DiffLine {
                     content: "    z := x + y".to_string(),
                     line_type: DiffLineType::Added,
+                    old_line_number: None,
+                    new_line_number: Some(6),
                 }],
+                context_lines: 3,
             },
         ];
 
@@ -2479,12 +2501,17 @@ func (c *Calculator) Calculate(op string, a, b int) int {
                     DiffLine {
                         content: "func Add(a, b int) int {".to_string(),
                         line_type: DiffLineType::Context,
+                        old_line_number: Some(3),
+                        new_line_number: Some(3),
                     },
                     DiffLine {
                         content: "    // Added validation".to_string(),
                         line_type: DiffLineType::Added,
+                        old_line_number: None,
+                        new_line_number: Some(4),
                     },
                 ],
+                context_lines: 3,
             },
             // Calculator 方法中的变更
             DiffHunk {
@@ -2497,16 +2524,23 @@ func (c *Calculator) Calculate(op string, a, b int) int {
                         content: "func (c *Calculator) Calculate(op string, a, b int) int {"
                             .to_string(),
                         line_type: DiffLineType::Context,
+                        old_line_number: Some(17),
+                        new_line_number: Some(18),
                     },
                     DiffLine {
                         content: "    // Added logging".to_string(),
                         line_type: DiffLineType::Added,
+                        old_line_number: None,
+                        new_line_number: Some(19),
                     },
                     DiffLine {
                         content: "    switch op {".to_string(),
                         line_type: DiffLineType::Context,
+                        old_line_number: Some(18),
+                        new_line_number: Some(20),
                     },
                 ],
+                context_lines: 3,
             },
         ];
 

@@ -42,6 +42,9 @@ regex = "1.11"
 # 时间处理
 chrono = "0.4"
 
+# 文本差异算法
+imara-diff = "0.2"
+
 # 测试工具
 tempfile = "3.20"
 criterion = "0.6"
