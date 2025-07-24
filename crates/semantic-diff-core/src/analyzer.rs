@@ -8,9 +8,12 @@ use crate::parser::{
     GoFunctionInfo, GoTypeDefinition, LanguageParser, ParserFactory, SourceFile, SupportedLanguage,
     common::{CstNavigator, LanguageSpecificInfo},
 };
+use crate::performance::{ConcurrentFileProcessor, ErrorRecoveryStrategy};
+use rayon::prelude::*;
 use std::collections::HashSet;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use tracing::{debug, info, warn};
 
 /// 通用源文件分析器
 ///
@@ -649,6 +652,104 @@ impl DependencyResolver {
 }
 
 impl SourceAnalyzer {
+    /// 并发分析多个文件
+    ///
+    /// 使用 rayon 并发处理多个文件，提高大型项目的分析性能
+    pub fn analyze_files_concurrent(file_paths: &[PathBuf]) -> Result<Vec<SourceFile>> {
+        info!("开始并发分析 {} 个文件", file_paths.len());
+
+        let processor = ConcurrentFileProcessor::new();
+        let parse_result = processor.process_files_concurrent(file_paths)?;
+
+        if !parse_result.failed.is_empty() {
+            warn!("有 {} 个文件解析失败", parse_result.failed.len());
+            for (path, error) in &parse_result.failed {
+                debug!("文件解析失败: {:?}, 错误: {}", path, error);
+            }
+        }
+
+        info!(
+            "文件分析完成: 成功 {}, 失败 {}, 总耗时 {:?}",
+            parse_result.successful.len(),
+            parse_result.failed.len(),
+            parse_result.performance_stats.total_duration
+        );
+
+        Ok(parse_result.successful)
+    }
+
+    /// 并发分析多个文件（带错误恢复）
+    ///
+    /// 使用错误恢复策略处理解析失败的文件
+    pub fn analyze_files_concurrent_with_recovery(
+        file_paths: &[PathBuf],
+        recovery_strategy: ErrorRecoveryStrategy,
+    ) -> Result<Vec<SourceFile>> {
+        info!("开始并发分析 {} 个文件（带错误恢复）", file_paths.len());
+
+        let results: Vec<_> = file_paths
+            .par_iter()
+            .map(|file_path| {
+                recovery_strategy.execute_with_retry(|| {
+                    let mut analyzer = Self::new_for_file(file_path)?;
+                    analyzer.analyze_file(file_path)
+                })
+            })
+            .collect();
+
+        let mut successful = Vec::new();
+        let mut failed_count = 0;
+
+        for result in results {
+            match result {
+                Ok(source_file) => successful.push(source_file),
+                Err(error) => {
+                    failed_count += 1;
+                    debug!("文件分析失败: {}", error);
+                }
+            }
+        }
+
+        info!(
+            "文件分析完成（带恢复）: 成功 {}, 失败 {}",
+            successful.len(),
+            failed_count
+        );
+
+        Ok(successful)
+    }
+
+    /// 批量分析文件
+    ///
+    /// 将文件分批处理，避免内存使用过多
+    pub fn analyze_files_in_batches(
+        file_paths: &[PathBuf],
+        batch_size: usize,
+    ) -> Result<Vec<SourceFile>> {
+        info!(
+            "开始批量分析 {} 个文件，批大小: {}",
+            file_paths.len(),
+            batch_size
+        );
+
+        let mut all_results = Vec::new();
+
+        for (batch_index, batch) in file_paths.chunks(batch_size).enumerate() {
+            debug!("处理第 {} 批，包含 {} 个文件", batch_index + 1, batch.len());
+
+            let batch_results = Self::analyze_files_concurrent(batch)?;
+            all_results.extend(batch_results);
+
+            // 在批次之间进行内存清理提示
+            if batch_index % 10 == 9 {
+                debug!("已处理 {} 批文件，建议进行内存清理", batch_index + 1);
+            }
+        }
+
+        info!("批量分析完成，总共处理 {} 个文件", all_results.len());
+        Ok(all_results)
+    }
+
     /// 根据文件路径创建分析器
     ///
     /// 自动检测文件的编程语言并创建对应的解析器

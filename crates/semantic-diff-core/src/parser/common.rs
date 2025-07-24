@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use tree_sitter::{Node, Tree};
 
 /// 支持的编程语言枚举
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SupportedLanguage {
     Go,
     // 未来支持的语言

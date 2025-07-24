@@ -39,7 +39,14 @@ chrono = { workspace = true }
 # 文本差异算法
 imara-diff = { workspace = true }
 
+# 系统信息
+num_cpus = { workspace = true }
+
 [dev-dependencies]
 criterion = { workspace = true }
 tempfile = { workspace = true }
 pretty_assertions = { workspace = true }
+
+[[bench]]
+name = "performance_benchmarks"
+harness = false

@@ -10,6 +10,7 @@ pub mod formatter;
 pub mod generator;
 pub mod git;
 pub mod parser;
+pub mod performance;
 
 // 重新导出主要的公共 API
 pub use analyzer::{DependencyResolver, TypeAnalyzer};
@@ -26,4 +27,9 @@ pub use parser::{
     Declaration, GoConstantDefinition, GoDeclaration, GoFunctionInfo, GoLanguageInfo, GoParameter,
     GoParser, GoReceiverInfo, GoType, GoTypeDefinition, GoTypeKind, GoVariableDefinition, Import,
     LanguageParser, LanguageSpecificInfo, ParserFactory, SourceFile, SupportedLanguage,
+};
+// 导出性能优化组件
+pub use performance::{
+    CacheStats, ConcurrentFileProcessor, ErrorRecoveryStrategy, MemoryEfficientAstProcessor,
+    ParseResult, ParserCache, PerformanceMonitor, PerformanceStats,
 };

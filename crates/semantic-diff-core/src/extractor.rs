@@ -9,8 +9,12 @@ use crate::parser::{
     GoConstantDefinition, GoFunctionInfo, GoTypeDefinition, GoVariableDefinition, Import,
     SourceFile,
 };
+use crate::performance::MemoryEfficientAstProcessor;
+use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
+use std::time::Instant;
+use tracing::{debug, info};
 
 /// 语义上下文提取器
 ///
@@ -299,6 +303,123 @@ impl SemanticContextExtractor {
             dependency_resolver: DependencyResolver::new(),
             max_recursion_depth: 10, // 默认最大递归深度
         }
+    }
+
+    /// 并发提取多个变更目标的语义上下文
+    ///
+    /// 使用 rayon 并发处理多个变更目标，提高大型项目的提取性能
+    pub fn extract_contexts_concurrent(
+        &self,
+        change_targets: &[ChangeTarget],
+        source_files: &[SourceFile],
+    ) -> Result<Vec<SemanticContext>> {
+        info!(
+            "开始并发提取 {} 个变更目标的语义上下文",
+            change_targets.len()
+        );
+        let start_time = Instant::now();
+
+        let contexts: Result<Vec<_>> = change_targets
+            .par_iter()
+            .map(|target| {
+                debug!("提取变更目标的上下文: {}", target.name());
+                self.extract_context_for_target(target.clone(), source_files)
+            })
+            .collect();
+
+        let contexts = contexts?;
+        let duration = start_time.elapsed();
+
+        info!(
+            "并发上下文提取完成: {} 个目标, 耗时 {:?}",
+            contexts.len(),
+            duration
+        );
+
+        Ok(contexts)
+    }
+
+    /// 批量提取语义上下文
+    ///
+    /// 将变更目标分批处理，避免内存使用过多
+    pub fn extract_contexts_in_batches(
+        &self,
+        change_targets: &[ChangeTarget],
+        source_files: &[SourceFile],
+        batch_size: usize,
+    ) -> Result<Vec<SemanticContext>> {
+        info!(
+            "开始批量提取 {} 个变更目标的语义上下文，批大小: {}",
+            change_targets.len(),
+            batch_size
+        );
+
+        let mut all_contexts = Vec::new();
+        let ast_processor = MemoryEfficientAstProcessor::new();
+
+        for (batch_index, batch) in change_targets.chunks(batch_size).enumerate() {
+            debug!(
+                "处理第 {} 批，包含 {} 个变更目标",
+                batch_index + 1,
+                batch.len()
+            );
+
+            // 检查内存使用情况
+            if ast_processor.should_trigger_gc() {
+                debug!("内存使用过高，触发清理");
+                ast_processor.trigger_gc();
+            }
+
+            let batch_contexts = self.extract_contexts_concurrent(batch, source_files)?;
+            all_contexts.extend(batch_contexts);
+
+            debug!("第 {} 批处理完成", batch_index + 1);
+        }
+
+        info!("批量上下文提取完成，总共处理 {} 个目标", all_contexts.len());
+        Ok(all_contexts)
+    }
+
+    /// 优化的递归类型提取
+    ///
+    /// 使用内存高效的策略进行递归类型提取
+    pub fn extract_types_optimized(
+        &self,
+        type_names: &[String],
+        source_files: &[SourceFile],
+    ) -> Result<Vec<GoTypeDefinition>> {
+        let mut processed = HashSet::new();
+        let mut result_types = Vec::new();
+        let ast_processor = MemoryEfficientAstProcessor::new();
+
+        // 使用并发处理初始类型列表
+        let initial_types: Result<Vec<_>> = type_names
+            .par_iter()
+            .filter_map(|type_name| {
+                self.dependency_resolver
+                    .find_type_definition(type_name, source_files)
+                    .map(Ok)
+            })
+            .collect();
+
+        let initial_types = initial_types?;
+
+        // 递归处理依赖类型
+        for type_def in initial_types {
+            if ast_processor.should_trigger_gc() {
+                ast_processor.trigger_gc();
+            }
+
+            self.extract_type_recursively(
+                &type_def.name,
+                source_files,
+                &mut result_types,
+                &mut processed,
+                0,
+            )?;
+        }
+
+        Ok(result_types)
     }
 
     /// 创建带有项目路径的语义上下文提取器

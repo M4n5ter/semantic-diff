@@ -1006,7 +1006,6 @@ mod tests {
                 // 如果没有检测到重命名，可能是因为 gix 的实现差异
                 // 这种情况下我们跳过这个测试
                 println!("Git implementation may have different rename detection behavior");
-                return;
             }
         } else if changes.len() == 2 {
             // 如果有两个变更（添加和删除），应用重命名检测
@@ -1044,8 +1043,7 @@ mod tests {
         let mut large_content = String::new();
         for i in 0..1000 {
             large_content.push_str(&format!(
-                "// Line {}\nfunc function{}() {{\n    return {}\n}}\n\n",
-                i, i, i
+                "// Line {i}\nfunc function{i}() {{\n    return {i}\n}}\n\n"
             ));
         }
 
