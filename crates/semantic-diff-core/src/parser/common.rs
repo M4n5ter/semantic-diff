@@ -92,6 +92,9 @@ pub trait Declaration: Send + Sync + std::fmt::Debug {
 
     /// 转换为 Any trait，用于向下转型
     fn as_any(&self) -> &dyn std::any::Any;
+
+    /// 克隆为 Box<dyn Declaration>
+    fn clone_box(&self) -> Box<dyn Declaration>;
 }
 
 /// 语言特定信息的 trait
@@ -100,16 +103,14 @@ pub trait Declaration: Send + Sync + std::fmt::Debug {
 pub trait LanguageSpecificInfo: Send + Sync + std::fmt::Debug {
     /// 转换为 Any trait，用于向下转型
     fn as_any(&self) -> &dyn std::any::Any;
-
+    /// 克隆为 Box<dyn LanguageSpecificInfo>
+    fn clone_box(&self) -> Box<dyn LanguageSpecificInfo>;
     /// 获取语言类型
     fn language(&self) -> SupportedLanguage;
-
     /// 获取包或模块名称
     fn package_name(&self) -> &str;
-
     /// 获取导入列表
     fn imports(&self) -> &[Import];
-
     /// 获取声明列表
     fn declarations(&self) -> &[Box<dyn Declaration>];
 }
@@ -416,6 +417,18 @@ pub struct SourceFile {
     pub language: SupportedLanguage,
     /// 语言特定的信息通过 trait object 处理
     pub language_specific: Box<dyn LanguageSpecificInfo>,
+}
+
+impl Clone for SourceFile {
+    fn clone(&self) -> Self {
+        Self {
+            path: self.path.clone(),
+            source_code: self.source_code.clone(),
+            syntax_tree: self.syntax_tree.clone(),
+            language: self.language,
+            language_specific: self.language_specific.clone_box(),
+        }
+    }
 }
 
 #[cfg(test)]

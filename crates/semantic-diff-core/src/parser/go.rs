@@ -157,6 +157,10 @@ impl Declaration for GoDeclaration {
     fn as_any(&self) -> &dyn std::any::Any {
         self
     }
+
+    fn clone_box(&self) -> Box<dyn Declaration> {
+        Box::new(self.clone())
+    }
 }
 
 /// Go 语言特定信息
@@ -165,6 +169,16 @@ pub struct GoLanguageInfo {
     pub package_name: String,
     pub imports: Vec<Import>,
     pub declarations: Vec<Box<dyn Declaration>>,
+}
+
+impl Clone for GoLanguageInfo {
+    fn clone(&self) -> Self {
+        Self {
+            package_name: self.package_name.clone(),
+            imports: self.imports.clone(),
+            declarations: self.declarations.iter().map(|d| d.clone_box()).collect(),
+        }
+    }
 }
 
 impl GoLanguageInfo {
@@ -226,6 +240,10 @@ impl GoLanguageInfo {
 impl LanguageSpecificInfo for GoLanguageInfo {
     fn as_any(&self) -> &dyn std::any::Any {
         self
+    }
+
+    fn clone_box(&self) -> Box<dyn LanguageSpecificInfo> {
+        Box::new((*self).clone())
     }
 
     fn language(&self) -> SupportedLanguage {
