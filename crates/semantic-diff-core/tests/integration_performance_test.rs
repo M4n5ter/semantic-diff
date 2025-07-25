@@ -268,14 +268,12 @@ fn test_semantic_context_extractor_batch_processing() {
             .downcast_ref::<semantic_diff_core::parser::GoLanguageInfo>()
         {
             for declaration in go_info.declarations() {
-                if let Some(go_decl) = declaration
-                    .as_any()
-                    .downcast_ref::<semantic_diff_core::parser::GoDeclaration>()
+                if let Some(semantic_diff_core::parser::GoDeclaration::Function(func_info)) =
+                    declaration
+                        .as_any()
+                        .downcast_ref::<semantic_diff_core::parser::GoDeclaration>()
                 {
-                    if let semantic_diff_core::parser::GoDeclaration::Function(func_info) = go_decl
-                    {
-                        change_targets.push(ChangeTarget::Function(func_info.clone()));
-                    }
+                    change_targets.push(ChangeTarget::Function(func_info.clone()));
                 }
             }
         }
@@ -378,19 +376,13 @@ impl Default for LargeScaleTestConfig {
 struct LargeScaleTestSuite {
     temp_dir: TempDir,
     config: LargeScaleTestConfig,
-    monitor: PerformanceMonitor,
 }
 
 impl LargeScaleTestSuite {
     fn new(config: LargeScaleTestConfig) -> Self {
         let temp_dir = TempDir::new().unwrap();
-        let monitor = PerformanceMonitor::new();
 
-        Self {
-            temp_dir,
-            config,
-            monitor,
-        }
+        Self { temp_dir, config }
     }
 
     /// 生成大型测试数据集
@@ -1116,9 +1108,7 @@ fn test_scalability_analysis() {
     // 分析可扩展性
     println!("\n=== 可扩展性分析 ===");
     for (i, (size, duration, throughput)) in results.iter().enumerate() {
-        println!(
-            "规模 {size}: 耗时 {duration:?}, 吞吐量 {throughput:.2} 文件/秒"
-        );
+        println!("规模 {size}: 耗时 {duration:?}, 吞吐量 {throughput:.2} 文件/秒");
 
         if i > 0 {
             let prev_throughput = results[i - 1].2;

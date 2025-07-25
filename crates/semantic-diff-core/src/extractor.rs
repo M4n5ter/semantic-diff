@@ -1544,49 +1544,6 @@ impl SemanticContextExtractor {
         Ok(cross_module_deps)
     }
 
-    /// 查找类型所在的模块
-    fn find_type_module(&self, type_name: &str, source_files: &[SourceFile]) -> Option<String> {
-        for source_file in source_files {
-            if let Some(go_info) = source_file
-                .language_specific
-                .as_any()
-                .downcast_ref::<crate::parser::GoLanguageInfo>()
-            {
-                for declaration in go_info.declarations() {
-                    if let Some(crate::parser::GoDeclaration::Type(type_def)) = declaration
-                        .as_any()
-                        .downcast_ref::<crate::parser::GoDeclaration>()
-                    {
-                        if type_def.name == type_name {
-                            return Some(go_info.package_name().to_string());
-                        }
-                    }
-                }
-            }
-        }
-        None
-    }
-
-    /// 查找依赖所在的模块
-    fn find_dependency_module(
-        &self,
-        dependency: &Dependency,
-        source_files: &[SourceFile],
-    ) -> Option<String> {
-        for source_file in source_files {
-            if source_file.path == dependency.file_path {
-                if let Some(go_info) = source_file
-                    .language_specific
-                    .as_any()
-                    .downcast_ref::<crate::parser::GoLanguageInfo>()
-                {
-                    return Some(go_info.package_name().to_string());
-                }
-            }
-        }
-        None
-    }
-
     /// 收集必需的导入声明
     ///
     /// 分析函数和类型定义，确定需要哪些导入声明

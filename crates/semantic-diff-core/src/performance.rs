@@ -11,13 +11,19 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 use tracing::{debug, info, warn};
 
+/// 类型别名：缓存的解析器类型
+type CachedParser = Arc<Mutex<Box<dyn LanguageParser>>>;
+
+/// 类型别名：解析器缓存映射类型
+type ParserCacheMap = HashMap<SupportedLanguage, CachedParser>;
+
 /// 解析器缓存
 ///
 /// 缓存已创建的解析器实例，避免重复创建的开销
 pub struct ParserCache {
     /// 缓存的解析器实例
     /// 注意：由于 tree-sitter 解析器不是 Clone，我们使用工厂函数
-    cache: Arc<RwLock<HashMap<SupportedLanguage, Arc<Mutex<Box<dyn LanguageParser>>>>>>,
+    cache: Arc<RwLock<ParserCacheMap>>,
     /// 缓存统计信息
     stats: Arc<Mutex<CacheStats>>,
 }
@@ -131,10 +137,7 @@ impl ParserCache {
     }
 
     /// 获取或创建解析器
-    pub fn get_or_create_parser(
-        &self,
-        language: SupportedLanguage,
-    ) -> Result<Arc<Mutex<Box<dyn LanguageParser>>>> {
+    pub fn get_or_create_parser(&self, language: SupportedLanguage) -> Result<CachedParser> {
         // 首先尝试从缓存中获取
         {
             let cache = self.cache.read().unwrap();

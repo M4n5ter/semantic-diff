@@ -255,16 +255,4 @@ impl Cli {
 
         Ok(())
     }
-
-    /// 显示使用帮助信息
-    pub fn print_help() {
-        use clap::CommandFactory;
-        let mut cmd = Self::command();
-        cmd.print_help().expect("Failed to print help");
-    }
-
-    /// 显示版本信息
-    pub fn print_version() {
-        println!("{} {}", env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"));
-    }
 }

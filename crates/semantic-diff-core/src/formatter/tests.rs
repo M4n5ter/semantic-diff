@@ -1,7 +1,6 @@
 //! 输出格式化器测试
 
 use super::*;
-use crate::extractor::{ChangeTarget, SemanticContext};
 use crate::generator::CodeSlice;
 use crate::parser::{GoFunctionInfo, GoParameter, GoType};
 use std::path::PathBuf;
@@ -42,30 +41,6 @@ fn create_test_code_slice() -> CodeSlice {
         line_mapping: [(11, 5)].iter().cloned().collect(),
         involved_files: vec![PathBuf::from("test.go")],
         content: "// Test code slice\n// Generated for testing\n\nimport \"fmt\"\n\ntype TestStruct struct {\n    Field string\n}\n\nconst TestConst = \"test\"\n\nvar TestVar string\n\nfunc TestFunction(param1 string) error {\n    return nil\n}".to_string(),
-    }
-}
-
-/// 创建测试用的语义上下文
-fn create_test_semantic_context() -> SemanticContext {
-    let function = GoFunctionInfo {
-        name: "TestFunction".to_string(),
-        receiver: None,
-        parameters: vec![],
-        return_types: vec![],
-        body: "func TestFunction() {}".to_string(),
-        start_line: 1,
-        end_line: 1,
-        file_path: PathBuf::from("test.go"),
-    };
-
-    SemanticContext {
-        change_target: ChangeTarget::Function(function),
-        related_types: vec![],
-        dependent_functions: vec![],
-        constants: vec![],
-        variables: vec![],
-        imports: vec![],
-        cross_module_dependencies: std::collections::HashMap::new(),
     }
 }
 
@@ -110,8 +85,10 @@ fn test_render_plain_text() {
 
 #[test]
 fn test_render_markdown() {
-    let mut config = FormatterConfig::default();
-    config.output_format = OutputFormat::Markdown;
+    let config = FormatterConfig {
+        output_format: OutputFormat::Markdown,
+        ..Default::default()
+    };
     let renderer = OutputRenderer::new(config);
     let code_slice = create_test_code_slice();
 
@@ -128,8 +105,10 @@ fn test_render_markdown() {
 
 #[test]
 fn test_render_html() {
-    let mut config = FormatterConfig::default();
-    config.output_format = OutputFormat::Html;
+    let config = FormatterConfig {
+        output_format: OutputFormat::Html,
+        ..Default::default()
+    };
     let renderer = OutputRenderer::new(config);
     let code_slice = create_test_code_slice();
 
@@ -157,22 +136,28 @@ fn test_highlight_styles() {
     let code_slice = create_test_code_slice();
 
     // 测试无高亮
-    let mut config = FormatterConfig::default();
-    config.highlight_style = HighlightStyle::None;
+    let config = FormatterConfig {
+        highlight_style: HighlightStyle::None,
+        ..Default::default()
+    };
     let renderer = OutputRenderer::new(config);
     let result = renderer.render(&code_slice).unwrap();
     assert!(!result.content.contains(">"));
 
     // 测试内联高亮
-    let mut config = FormatterConfig::default();
-    config.highlight_style = HighlightStyle::Inline;
+    let config = FormatterConfig {
+        highlight_style: HighlightStyle::Inline,
+        ..Default::default()
+    };
     let renderer = OutputRenderer::new(config);
     let result = renderer.render(&code_slice).unwrap();
     assert!(result.content.contains(">"));
 
     // 测试分离式高亮
-    let mut config = FormatterConfig::default();
-    config.highlight_style = HighlightStyle::Separate;
+    let config = FormatterConfig {
+        highlight_style: HighlightStyle::Separate,
+        ..Default::default()
+    };
     let renderer = OutputRenderer::new(config);
     let result = renderer.render(&code_slice).unwrap();
     assert!(result.content.contains("=== Full Content ==="));
@@ -184,15 +169,19 @@ fn test_line_numbers() {
     let code_slice = create_test_code_slice();
 
     // 测试显示行号
-    let mut config = FormatterConfig::default();
-    config.show_line_numbers = true;
+    let config = FormatterConfig {
+        show_line_numbers: true,
+        ..Default::default()
+    };
     let renderer = OutputRenderer::new(config);
     let result = renderer.render(&code_slice).unwrap();
     assert!(result.content.contains("1|") || result.content.contains("   1"));
 
     // 测试不显示行号
-    let mut config = FormatterConfig::default();
-    config.show_line_numbers = false;
+    let config = FormatterConfig {
+        show_line_numbers: false,
+        ..Default::default()
+    };
     let renderer = OutputRenderer::new(config);
     let result = renderer.render(&code_slice).unwrap();
     // 应该不包含行号格式
@@ -204,16 +193,20 @@ fn test_statistics_display() {
     let code_slice = create_test_code_slice();
 
     // 测试显示统计信息
-    let mut config = FormatterConfig::default();
-    config.show_statistics = true;
+    let config = FormatterConfig {
+        show_statistics: true,
+        ..Default::default()
+    };
     let renderer = OutputRenderer::new(config);
     let result = renderer.render(&code_slice).unwrap();
     assert!(result.content.contains("Statistics:"));
     assert!(result.content.contains("Total lines:"));
 
     // 测试不显示统计信息
-    let mut config = FormatterConfig::default();
-    config.show_statistics = false;
+    let config = FormatterConfig {
+        show_statistics: false,
+        ..Default::default()
+    };
     let renderer = OutputRenderer::new(config);
     let result = renderer.render(&code_slice).unwrap();
     assert!(!result.content.contains("Statistics:"));
@@ -224,8 +217,10 @@ fn test_file_paths_display() {
     let code_slice = create_test_code_slice();
 
     // 测试显示文件路径
-    let mut config = FormatterConfig::default();
-    config.show_file_paths = true;
+    let config = FormatterConfig {
+        show_file_paths: true,
+        ..Default::default()
+    };
     let renderer = OutputRenderer::new(config);
     let result = renderer.render(&code_slice).unwrap();
     assert!(
@@ -234,8 +229,10 @@ fn test_file_paths_display() {
     assert!(result.content.contains("test.go"));
 
     // 测试不显示文件路径
-    let mut config = FormatterConfig::default();
-    config.show_file_paths = false;
+    let config = FormatterConfig {
+        show_file_paths: false,
+        ..Default::default()
+    };
     let renderer = OutputRenderer::new(config);
     let result = renderer.render(&code_slice).unwrap();
     assert!(!result.content.contains("Files involved:"));
@@ -334,23 +331,29 @@ fn test_block_title_styles() {
     let code_slice = create_test_code_slice();
 
     // 详细样式
-    let mut config = FormatterConfig::default();
-    config.block_title_style = BlockTitleStyle::Detailed;
+    let config = FormatterConfig {
+        block_title_style: BlockTitleStyle::Detailed,
+        ..Default::default()
+    };
     let renderer = OutputRenderer::new(config);
     let result = renderer.render(&code_slice).unwrap();
     assert!(result.content.contains("//"));
 
     // 简洁样式
-    let mut config = FormatterConfig::default();
-    config.block_title_style = BlockTitleStyle::Minimal;
+    let config = FormatterConfig {
+        block_title_style: BlockTitleStyle::Minimal,
+        ..Default::default()
+    };
     let renderer = OutputRenderer::new(config);
     let result = renderer.render(&code_slice).unwrap();
     // 当前实现中，简洁样式和详细样式相同，这里只是确保不会出错
     assert!(!result.content.is_empty());
 
     // 无标题
-    let mut config = FormatterConfig::default();
-    config.block_title_style = BlockTitleStyle::None;
+    let config = FormatterConfig {
+        block_title_style: BlockTitleStyle::None,
+        ..Default::default()
+    };
     let renderer = OutputRenderer::new(config);
     let result = renderer.render(&code_slice).unwrap();
     // 当前实现中，无标题样式和其他样式相同，这里只是确保不会出错
@@ -359,9 +362,11 @@ fn test_block_title_styles() {
 
 #[test]
 fn test_custom_css() {
-    let mut config = FormatterConfig::default();
-    config.output_format = OutputFormat::Html;
-    config.custom_css = Some("body { background-color: red; }".to_string());
+    let config = FormatterConfig {
+        output_format: OutputFormat::Html,
+        custom_css: Some("body { background-color: red; }".to_string()),
+        ..Default::default()
+    };
 
     let renderer = OutputRenderer::new(config);
     let code_slice = create_test_code_slice();
@@ -372,8 +377,10 @@ fn test_custom_css() {
 
 #[test]
 fn test_max_line_width() {
-    let mut config = FormatterConfig::default();
-    config.max_line_width = Some(80);
+    let config = FormatterConfig {
+        max_line_width: Some(80),
+        ..Default::default()
+    };
 
     let renderer = OutputRenderer::new(config);
     let code_slice = create_test_code_slice();
@@ -409,18 +416,24 @@ fn test_empty_code_slice() {
 
 #[test]
 fn test_markdown_highlighting_styles() {
-    let mut config = FormatterConfig::default();
-    config.output_format = OutputFormat::Markdown;
     let code_slice = create_test_code_slice();
 
     // 内联高亮
-    config.highlight_style = HighlightStyle::Inline;
-    let renderer = OutputRenderer::new(config.clone());
+    let config = FormatterConfig {
+        output_format: OutputFormat::Markdown,
+        highlight_style: HighlightStyle::Inline,
+        ..Default::default()
+    };
+    let renderer = OutputRenderer::new(config);
     let result = renderer.render(&code_slice).unwrap();
     assert!(result.content.contains("// >>> CHANGED:"));
 
     // 分离式高亮
-    config.highlight_style = HighlightStyle::Separate;
+    let config = FormatterConfig {
+        output_format: OutputFormat::Markdown,
+        highlight_style: HighlightStyle::Separate,
+        ..Default::default()
+    };
     let renderer = OutputRenderer::new(config);
     let result = renderer.render(&code_slice).unwrap();
     assert!(result.content.contains("### Full Code"));
@@ -432,15 +445,19 @@ fn test_color_output_control() {
     let code_slice = create_test_code_slice();
 
     // 启用颜色
-    let mut config = FormatterConfig::default();
-    config.enable_colors = true;
+    let config = FormatterConfig {
+        enable_colors: true,
+        ..Default::default()
+    };
     let renderer = OutputRenderer::new(config);
     let result = renderer.render(&code_slice).unwrap();
     assert!(result.content.contains("\x1b["));
 
     // 禁用颜色
-    let mut config = FormatterConfig::default();
-    config.enable_colors = false;
+    let config = FormatterConfig {
+        enable_colors: false,
+        ..Default::default()
+    };
     let renderer = OutputRenderer::new(config);
     let result = renderer.render(&code_slice).unwrap();
     assert!(!result.content.contains("\x1b["));
