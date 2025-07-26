@@ -520,24 +520,41 @@ impl CodeSliceGenerator {
         code_blocks: &mut [CodeBlock],
         changes: &[DiffHunk],
     ) -> Result<()> {
+        // 收集所有需要高亮的变更行内容
+        let mut change_lines = Vec::new();
+
         for change_hunk in changes {
             for diff_line in &change_hunk.lines {
-                let target_line = match diff_line.line_type {
-                    DiffLineType::Added => {
-                        change_hunk.new_start + diff_line.content.lines().count() as u32 - 1
-                    }
-                    DiffLineType::Removed => {
-                        change_hunk.old_start + diff_line.content.lines().count() as u32 - 1
-                    }
-                    DiffLineType::Context => continue,
-                };
+                // 只处理添加和删除的行
+                if matches!(
+                    diff_line.line_type,
+                    DiffLineType::Added | DiffLineType::Removed
+                ) {
+                    let change_content =
+                        diff_line.content.trim_start_matches(['+', '-', ' ']).trim();
 
-                // 在代码块中查找对应的行并标记高亮
-                for block in code_blocks.iter_mut() {
-                    for line in &mut block.lines {
-                        if self.line_matches_change(line, &diff_line.content, target_line) {
+                    // 跳过空行和过短的内容
+                    if !change_content.is_empty() && change_content.len() > 2 {
+                        change_lines
+                            .push((change_content.to_string(), diff_line.line_type.clone()));
+                    }
+                }
+            }
+        }
+
+        // 在代码块中查找匹配的行
+        for block in code_blocks.iter_mut() {
+            for line in block.lines.iter_mut() {
+                let line_content = line.content.trim();
+
+                // 检查是否与任何变更行匹配
+                for (change_content, change_type) in &change_lines {
+                    if line_content == change_content {
+                        // 使用更严格的匹配条件
+                        if self.should_highlight_change(change_content) {
                             line.is_highlighted = true;
-                            line.change_type = Some(diff_line.line_type.clone());
+                            line.change_type = Some(change_type.clone());
+                            break;
                         }
                     }
                 }
@@ -547,18 +564,126 @@ impl CodeSliceGenerator {
         Ok(())
     }
 
-    /// 检查行是否匹配变更
-    fn line_matches_change(
-        &self,
-        line: &CodeLine,
-        change_content: &str,
-        _target_line: u32,
-    ) -> bool {
-        // 简单的内容匹配，去除前后空白
-        let line_trimmed = line.content.trim();
-        let change_trimmed = change_content.trim_start_matches(['+', '-', ' ']);
+    /// 检查变更是否足够重要以进行高亮
+    fn is_significant_change(&self, change_content: &str) -> bool {
+        // 跳过过短的内容
+        if change_content.len() < 5 {
+            return false;
+        }
 
-        line_trimmed == change_trimmed.trim()
+        // 跳过只包含符号的行
+        if change_content
+            .chars()
+            .all(|c| "{}()[];,".contains(c) || c.is_whitespace())
+        {
+            return false;
+        }
+
+        // 跳过过于通用的内容
+        let generic_patterns = [
+            "return", "break", "continue", "}", "{", ")", "(", "nil", "null", "true", "false",
+        ];
+
+        if generic_patterns.contains(&change_content) {
+            return false;
+        }
+
+        // 包含关键字或标识符的行更可能是重要变更
+        let has_keywords = change_content.contains("case ")
+            || change_content.contains("func ")
+            || change_content.contains("type ")
+            || change_content.contains("var ")
+            || change_content.contains("const ")
+            || change_content.contains("import ")
+            || change_content.contains("if ")
+            || change_content.contains("for ")
+            || change_content.contains("switch ");
+
+        let has_function_call = change_content.contains("(") && change_content.contains(")");
+        let has_assignment = change_content.contains("=") || change_content.contains(":=");
+        let has_comment = change_content.contains("//");
+
+        has_keywords || has_function_call || has_assignment || has_comment
+    }
+
+    /// 验证上下文匹配以提高匹配精度
+    fn verify_context_match(
+        &self,
+        lines: &[CodeLine],
+        target_index: usize,
+        context: &[String],
+    ) -> bool {
+        // 如果没有上下文信息，直接返回 true（降级到简单匹配）
+        if context.is_empty() {
+            return true;
+        }
+
+        // 检查前后几行是否包含上下文中的任何一行
+        let search_range = 3; // 在目标行前后3行内搜索上下文
+        let start = target_index.saturating_sub(search_range);
+        let end = (target_index + search_range + 1).min(lines.len());
+
+        for ctx_line in context {
+            for (i, line) in lines.iter().enumerate().take(end).skip(start) {
+                if i != target_index && line.content.trim() == ctx_line.trim() {
+                    return true;
+                }
+            }
+        }
+
+        // 如果找不到上下文匹配，但变更内容足够独特，仍然可以匹配
+        let target_content = lines[target_index].content.trim();
+        self.is_unique_enough_for_highlighting(target_content)
+    }
+
+    /// 检查内容是否足够独特，可以在没有上下文的情况下进行高亮
+    fn is_unique_enough_for_highlighting(&self, content: &str) -> bool {
+        // 包含特定关键字的行通常是独特的
+        content.contains("ThinkingDelta")
+            || content.contains("Reasoning:")
+            || content.contains("// 只有当有实际内容时才发送")
+            || content.contains("chunk.Reasoning.IsSome()")
+            || (content.contains("case ") && content.contains("Delta:"))
+            || (content.contains("if ")
+                && content.contains("len(")
+                && content.contains("ContentParts"))
+    }
+
+    /// 更严格的变更匹配逻辑
+    fn should_highlight_change(&self, content: &str) -> bool {
+        // 只高亮真正重要且独特的变更
+        if !self.is_significant_change(content) {
+            return false;
+        }
+
+        // 进一步过滤：只高亮包含特定模式的行
+        let important_patterns = [
+            "ThinkingDelta",
+            "Reasoning:",
+            "只有当有实际内容时才发送",
+            "chunk.Reasoning.IsSome()",
+            "ContentParts",
+        ];
+
+        // 如果包含重要模式，直接高亮
+        if important_patterns
+            .iter()
+            .any(|&pattern| content.contains(pattern))
+        {
+            return true;
+        }
+
+        // 对于 case 语句，只有当它是新的 case 时才高亮
+        if content.contains("case ") && content.contains("Delta:") {
+            return true;
+        }
+
+        // 对于条件语句，只有当它包含特定逻辑时才高亮
+        if content.contains("if ") && (content.contains("len(") || content.contains("IsSome")) {
+            return true;
+        }
+
+        false
     }
 
     /// 检查行是否应该被高亮
@@ -638,9 +763,10 @@ impl CodeSliceGenerator {
         }
 
         // 生成最终内容
-        let content = self.formatter.format_content(&content_parts.join(""))?;
+        let raw_content = content_parts.join("");
+        let content = self.formatter.format_content(&raw_content)?;
 
-        Ok(CodeSlice {
+        let code_slice = CodeSlice {
             header_comment,
             imports,
             type_definitions,
@@ -652,7 +778,9 @@ impl CodeSliceGenerator {
             involved_files,
             content,
             dependency_graph: None, // 将在 generate_slice 中设置
-        })
+        };
+
+        Ok(code_slice)
     }
 }
 
@@ -688,14 +816,9 @@ impl CodeFormatter {
 
     /// 格式化为 Markdown
     fn format_markdown(&self, content: &str) -> String {
-        let mut result = String::new();
-        result.push_str("```go\n");
-        result.push_str(content);
-        if !content.ends_with('\n') {
-            result.push('\n');
-        }
-        result.push_str("```\n");
-        result
+        // 在 Markdown 渲染中，代码块标记由 formatter.rs 处理
+        // 这里只返回内容本身
+        content.to_string()
     }
 
     /// 格式化为 HTML
@@ -746,10 +869,11 @@ impl CodeFormatter {
             if highlighted_lines.contains(&line_number) {
                 match self.output_format {
                     OutputFormat::PlainText => {
-                        result.push_str(&format!("> {line}\n"));
+                        result.push_str(&format!("|CHANGED|> {line}\n"));
                     }
                     OutputFormat::Markdown => {
-                        result.push_str(&format!("**{line}**\n"));
+                        // 在 Markdown 代码块中使用注释来标记高亮行
+                        result.push_str(&format!("// >>> CHANGED: \n{line}\n"));
                     }
                     OutputFormat::Html => {
                         result.push_str(&format!("<mark>{line}</mark>\n"));

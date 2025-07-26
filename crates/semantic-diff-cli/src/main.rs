@@ -385,9 +385,20 @@ fn generate_code_slices(
     for context in semantic_contexts {
         // 找到对应的文件变更以获取差异信息
         let target_file_path = context.change_target.file_path();
+
         let relevant_hunks: Vec<_> = file_changes
             .iter()
-            .filter(|fc| fc.file_path == target_file_path.file_name().unwrap_or_default())
+            .filter(|fc| {
+                // 比较完整路径或者文件名
+                let target_path_str = target_file_path.to_string_lossy();
+                let fc_path_str = fc.file_path.to_string_lossy();
+
+                
+
+                fc_path_str == target_path_str
+                    || fc_path_str.ends_with(&*target_path_str)
+                    || target_path_str.ends_with(&*fc_path_str)
+            })
             .flat_map(|fc| &fc.hunks)
             .cloned()
             .collect();
@@ -417,7 +428,7 @@ fn generate_code_slices(
 
 /// 格式化并输出结果
 fn format_and_output(code_slices: &[semantic_diff_core::CodeSlice], config: &Config) -> Result<()> {
-    use semantic_diff_core::{formatter::OutputRenderer, generator::CodeFormatter};
+    use semantic_diff_core::formatter::OutputRenderer;
 
     if code_slices.is_empty() {
         let output = "No code slices generated.\n";
@@ -425,9 +436,7 @@ fn format_and_output(code_slices: &[semantic_diff_core::CodeSlice], config: &Con
         return Ok(());
     }
 
-    // 创建格式化器（暂时未使用，但保留以备将来使用）
-    let _formatter =
-        CodeFormatter::new(config.output_format.clone(), config.highlight_style.clone());
+    // 注意：格式化现在由渲染器处理，不需要单独的格式化器
 
     // 创建输出渲染器配置
     let renderer_config = semantic_diff_core::formatter::FormatterConfig {
@@ -469,7 +478,7 @@ fn format_and_output(code_slices: &[semantic_diff_core::CodeSlice], config: &Con
             final_output.push_str("\n\n");
         }
 
-        // 使用渲染器处理
+        // 使用渲染器处理最终输出格式（包括格式化和高亮）
         let rendered_output = renderer.render(slice)?;
         final_output.push_str(&rendered_output.content);
 

@@ -184,11 +184,14 @@ impl OutputRenderer {
         output.push_str(&code_slice.header_comment);
         output.push('\n');
 
-        // 根据高亮样式处理内容
-        let highlighted_content =
-            self.apply_highlighting_plain_text(&code_slice.content, &code_slice.highlighted_lines)?;
+        // 使用 CodeSlice 的格式化方法
+        let formatter = crate::generator::CodeFormatter::new(
+            self.config.output_format.clone(),
+            self.config.highlight_style.clone(),
+        );
+        let formatted_content = code_slice.get_formatted_content(&formatter)?;
 
-        output.push_str(&highlighted_content);
+        output.push_str(&formatted_content);
 
         Ok(output)
     }
@@ -226,11 +229,17 @@ impl OutputRenderer {
         );
         output.push_str("\n\n");
 
-        // 根据高亮样式处理代码块
-        let code_block =
-            self.apply_highlighting_markdown(&code_slice.content, &code_slice.highlighted_lines)?;
+        // 使用 CodeSlice 的格式化方法
+        let formatter = crate::generator::CodeFormatter::new(
+            OutputFormat::Markdown,
+            self.config.highlight_style.clone(),
+        );
+        let formatted_content = code_slice.get_formatted_content(&formatter)?;
 
-        output.push_str(&code_block);
+        // 将格式化内容包装在代码块中
+        output.push_str("```go\n");
+        output.push_str(&formatted_content);
+        output.push_str("\n```\n");
 
         Ok(output)
     }
@@ -294,12 +303,17 @@ impl OutputRenderer {
         let escaped_comment = html_escape(&code_slice.header_comment);
         output.push_str(&format!("            <div class=\"header-comment\">\n                <pre>{escaped_comment}</pre>\n            </div>\n"));
 
-        // 代码块
-        let code_block =
-            self.apply_highlighting_html(&code_slice.content, &code_slice.highlighted_lines)?;
+        // 使用 CodeSlice 的格式化方法
+        let formatter = crate::generator::CodeFormatter::new(
+            OutputFormat::Html,
+            self.config.highlight_style.clone(),
+        );
+        let formatted_content = code_slice.get_formatted_content(&formatter)?;
 
         output.push_str("            <div class=\"code-block\">\n");
-        output.push_str(&code_block);
+        output.push_str("                <pre><code class=\"language-go\">");
+        output.push_str(&html_escape(&formatted_content));
+        output.push_str("</code></pre>\n");
         output.push_str("            </div>\n");
         output.push_str("        </div>\n");
 

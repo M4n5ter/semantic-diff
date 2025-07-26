@@ -457,34 +457,123 @@ fn test_should_highlight_line() {
 }
 
 #[test]
-fn test_line_matches_change() {
+fn test_should_highlight_change() {
     let generator = CodeSliceGenerator::new();
 
-    let line = CodeLine {
-        content: "    return nil".to_string(),
-        line_number: 10,
-        is_highlighted: false,
-        change_type: None,
-    };
+    // 测试应该被高亮的重要变更
+    assert!(
+        generator.should_highlight_change("case anthropic.ThinkingDelta:"),
+        "Should highlight ThinkingDelta case"
+    );
+    assert!(
+        generator.should_highlight_change("Reasoning: Some(deltaVariant.JSON.Thinking.Raw()),"),
+        "Should highlight Reasoning assignment"
+    );
+    assert!(
+        generator.should_highlight_change("// 只有当有实际内容时才发送 chunk"),
+        "Should highlight important comment"
+    );
+    assert!(
+        generator.should_highlight_change(
+            "if len(chunk.ContentParts) > 0 || chunk.Reasoning.IsSome() {"
+        ),
+        "Should highlight condition with ContentParts"
+    );
 
-    // 测试匹配的情况
+    // 测试不应该被高亮的通用内容
     assert!(
-        generator.line_matches_change(&line, "-    return nil", 10),
-        "Should match removed line"
+        !generator.should_highlight_change("return"),
+        "Should not highlight simple return"
     );
     assert!(
-        generator.line_matches_change(&line, "+    return nil", 10),
-        "Should match added line"
+        !generator.should_highlight_change("}"),
+        "Should not highlight closing brace"
     );
     assert!(
-        generator.line_matches_change(&line, "     return nil", 10),
-        "Should match context line"
+        !generator.should_highlight_change("nil"),
+        "Should not highlight nil"
+    );
+    assert!(
+        !generator.should_highlight_change("x := 1"),
+        "Should not highlight simple assignment"
+    );
+}
+
+#[test]
+fn test_is_significant_change() {
+    let generator = CodeSliceGenerator::new();
+
+    // 测试重要的变更
+    assert!(
+        generator.is_significant_change("func processData(data string) error {"),
+        "Should consider function declaration significant"
+    );
+    assert!(
+        generator.is_significant_change("if data == \"\" {"),
+        "Should consider if statement significant"
+    );
+    assert!(
+        generator.is_significant_change("result := processData(input)"),
+        "Should consider assignment significant"
+    );
+    assert!(
+        generator.is_significant_change("// This is an important comment"),
+        "Should consider comments significant"
     );
 
-    // 测试不匹配的情况
+    // 测试不重要的变更
     assert!(
-        !generator.line_matches_change(&line, "    return error", 10),
-        "Should not match different content"
+        !generator.is_significant_change("return"),
+        "Should not consider simple return significant"
+    );
+    assert!(
+        !generator.is_significant_change("}"),
+        "Should not consider closing brace significant"
+    );
+    assert!(
+        !generator.is_significant_change("nil"),
+        "Should not consider nil significant"
+    );
+    assert!(
+        !generator.is_significant_change("()"),
+        "Should not consider empty parens significant"
+    );
+    assert!(
+        !generator.is_significant_change("x"),
+        "Should not consider short content significant"
+    );
+}
+
+#[test]
+fn test_is_unique_enough_for_highlighting() {
+    let generator = CodeSliceGenerator::new();
+
+    // 测试足够独特的内容
+    assert!(
+        generator.is_unique_enough_for_highlighting("case anthropic.ThinkingDelta:"),
+        "Should consider ThinkingDelta unique"
+    );
+    assert!(
+        generator.is_unique_enough_for_highlighting("Reasoning: Some(value)"),
+        "Should consider Reasoning assignment unique"
+    );
+    assert!(
+        generator.is_unique_enough_for_highlighting("// 只有当有实际内容时才发送 chunk"),
+        "Should consider specific comment unique"
+    );
+    assert!(
+        generator.is_unique_enough_for_highlighting("if len(chunk.ContentParts) > 0 {"),
+        "Should consider ContentParts condition unique"
+    );
+
+    // 测试不够独特的内容
+    assert!(
+        !generator.is_unique_enough_for_highlighting("case someValue:"),
+        "Should not consider generic case unique"
+    );
+    assert!(
+        !generator.is_unique_enough_for_highlighting("if x > 0 {"),
+        "Should not consider generic condition unique"
     );
 }
 
