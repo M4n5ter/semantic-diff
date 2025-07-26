@@ -276,6 +276,180 @@ impl SemanticContext {
 
         functions_by_file
     }
+
+    /// 生成依赖图
+    pub fn generate_dependency_graph(&self) -> DependencyGraph {
+        let root_id = format!(
+            "{}:{}",
+            format!("{:?}", self.change_target.change_type()).to_lowercase(),
+            self.change_target.name()
+        );
+
+        let mut graph = DependencyGraph::new(root_id.clone());
+
+        // 添加根节点（变更目标）
+        let root_node = DependencyNode {
+            id: root_id.clone(),
+            name: self.change_target.name().to_string(),
+            node_type: match self.change_target.change_type() {
+                ChangeType::Function => DependencyNodeType::Function,
+                ChangeType::Type => DependencyNodeType::Type,
+                ChangeType::Variable => DependencyNodeType::Variable,
+                ChangeType::Constant => DependencyNodeType::Constant,
+                ChangeType::Package => DependencyNodeType::Module,
+            },
+            file_path: Some(self.change_target.file_path().clone()),
+            is_change_target: true,
+        };
+        graph.add_node(root_node);
+
+        // 添加类型节点和边
+        for type_def in &self.related_types {
+            let type_id = format!("type:{}", type_def.name);
+            let type_node = DependencyNode {
+                id: type_id.clone(),
+                name: type_def.name.clone(),
+                node_type: DependencyNodeType::Type,
+                file_path: Some(type_def.file_path.clone()),
+                is_change_target: false,
+            };
+            graph.add_node(type_node);
+
+            // 添加从根节点到类型的边
+            graph.add_edge(DependencyEdge {
+                from: root_id.clone(),
+                to: type_id.clone(),
+                edge_type: DependencyEdgeType::TypeUsage,
+            });
+
+            // 添加类型之间的依赖边
+            for dep_type in &type_def.dependencies {
+                if self.related_types.iter().any(|t| &t.name == dep_type) {
+                    let dep_type_id = format!("type:{dep_type}");
+                    graph.add_edge(DependencyEdge {
+                        from: type_id.clone(),
+                        to: dep_type_id,
+                        edge_type: DependencyEdgeType::TypeUsage,
+                    });
+                }
+            }
+        }
+
+        // 添加函数节点和边
+        for function in &self.dependent_functions {
+            let func_id = format!("function:{}", function.name);
+            let func_node = DependencyNode {
+                id: func_id.clone(),
+                name: function.name.clone(),
+                node_type: DependencyNodeType::Function,
+                file_path: Some(function.file_path.clone()),
+                is_change_target: false,
+            };
+            graph.add_node(func_node);
+
+            // 添加从根节点到函数的边
+            graph.add_edge(DependencyEdge {
+                from: root_id.clone(),
+                to: func_id.clone(),
+                edge_type: DependencyEdgeType::FunctionCall,
+            });
+        }
+
+        // 添加常量节点和边
+        for constant in &self.constants {
+            let const_id = format!("constant:{}", constant.name);
+            let const_node = DependencyNode {
+                id: const_id.clone(),
+                name: constant.name.clone(),
+                node_type: DependencyNodeType::Constant,
+                file_path: Some(constant.file_path.clone()),
+                is_change_target: false,
+            };
+            graph.add_node(const_node);
+
+            graph.add_edge(DependencyEdge {
+                from: root_id.clone(),
+                to: const_id,
+                edge_type: DependencyEdgeType::ConstantReference,
+            });
+        }
+
+        // 添加变量节点和边
+        for variable in &self.variables {
+            let var_id = format!("variable:{}", variable.name);
+            let var_node = DependencyNode {
+                id: var_id.clone(),
+                name: variable.name.clone(),
+                node_type: DependencyNodeType::Variable,
+                file_path: Some(variable.file_path.clone()),
+                is_change_target: false,
+            };
+            graph.add_node(var_node);
+
+            graph.add_edge(DependencyEdge {
+                from: root_id.clone(),
+                to: var_id,
+                edge_type: DependencyEdgeType::VariableReference,
+            });
+        }
+
+        // 添加导入节点和边
+        for import in &self.imports {
+            let import_id = format!("import:{}", import.path);
+            let import_node = DependencyNode {
+                id: import_id.clone(),
+                name: import.alias.as_ref().unwrap_or(&import.path).clone(),
+                node_type: DependencyNodeType::Import,
+                file_path: None,
+                is_change_target: false,
+            };
+            graph.add_node(import_node);
+
+            graph.add_edge(DependencyEdge {
+                from: root_id.clone(),
+                to: import_id,
+                edge_type: DependencyEdgeType::ImportDependency,
+            });
+        }
+
+        // 添加跨模块依赖
+        for (module, dependencies) in &self.cross_module_dependencies {
+            let module_id = format!("module:{module}");
+            let module_node = DependencyNode {
+                id: module_id.clone(),
+                name: module.clone(),
+                node_type: DependencyNodeType::Module,
+                file_path: None,
+                is_change_target: false,
+            };
+            graph.add_node(module_node);
+
+            graph.add_edge(DependencyEdge {
+                from: root_id.clone(),
+                to: module_id.clone(),
+                edge_type: DependencyEdgeType::ModuleDependency,
+            });
+
+            // 添加模块内的具体依赖
+            for dep in dependencies {
+                let dep_parts: Vec<&str> = dep.split(':').collect();
+                if dep_parts.len() == 2 {
+                    let dep_id = format!("{}:{}", dep_parts[0], dep_parts[1]);
+                    graph.add_edge(DependencyEdge {
+                        from: module_id.clone(),
+                        to: dep_id,
+                        edge_type: match dep_parts[0] {
+                            "type" => DependencyEdgeType::TypeUsage,
+                            "function" => DependencyEdgeType::FunctionCall,
+                            _ => DependencyEdgeType::ModuleDependency,
+                        },
+                    });
+                }
+            }
+        }
+
+        graph
+    }
 }
 
 /// 语义上下文统计信息
@@ -288,6 +462,231 @@ pub struct ContextStats {
     pub imports_count: usize,
     pub files_count: usize,
     pub modules_count: usize,
+}
+
+/// 依赖图节点类型
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum DependencyNodeType {
+    Function,
+    Type,
+    Constant,
+    Variable,
+    Import,
+    Module,
+}
+
+/// 依赖图节点
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct DependencyNode {
+    pub id: String,
+    pub name: String,
+    pub node_type: DependencyNodeType,
+    pub file_path: Option<PathBuf>,
+    pub is_change_target: bool,
+}
+
+/// 依赖图边
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DependencyEdge {
+    pub from: String,
+    pub to: String,
+    pub edge_type: DependencyEdgeType,
+}
+
+/// 依赖边类型
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DependencyEdgeType {
+    /// 函数调用
+    FunctionCall,
+    /// 类型使用
+    TypeUsage,
+    /// 常量引用
+    ConstantReference,
+    /// 变量引用
+    VariableReference,
+    /// 导入依赖
+    ImportDependency,
+    /// 模块依赖
+    ModuleDependency,
+}
+
+/// 依赖图
+#[derive(Debug, Clone)]
+pub struct DependencyGraph {
+    pub nodes: Vec<DependencyNode>,
+    pub edges: Vec<DependencyEdge>,
+    pub root_node: String,
+}
+
+impl DependencyGraph {
+    /// 创建新的依赖图
+    pub fn new(root_node: String) -> Self {
+        Self {
+            nodes: Vec::new(),
+            edges: Vec::new(),
+            root_node,
+        }
+    }
+
+    /// 添加节点
+    pub fn add_node(&mut self, node: DependencyNode) {
+        if !self.nodes.iter().any(|n| n.id == node.id) {
+            self.nodes.push(node);
+        }
+    }
+
+    /// 添加边
+    pub fn add_edge(&mut self, edge: DependencyEdge) {
+        if !self
+            .edges
+            .iter()
+            .any(|e| e.from == edge.from && e.to == edge.to)
+        {
+            self.edges.push(edge);
+        }
+    }
+
+    /// 获取节点的直接依赖
+    pub fn get_direct_dependencies(&self, node_id: &str) -> Vec<&DependencyNode> {
+        self.edges
+            .iter()
+            .filter(|edge| edge.from == node_id)
+            .filter_map(|edge| self.nodes.iter().find(|node| node.id == edge.to))
+            .collect()
+    }
+
+    /// 获取依赖于指定节点的节点
+    pub fn get_dependents(&self, node_id: &str) -> Vec<&DependencyNode> {
+        self.edges
+            .iter()
+            .filter(|edge| edge.to == node_id)
+            .filter_map(|edge| self.nodes.iter().find(|node| node.id == edge.from))
+            .collect()
+    }
+
+    /// 按类型分组节点
+    pub fn get_nodes_by_type(&self) -> HashMap<DependencyNodeType, Vec<&DependencyNode>> {
+        let mut grouped = HashMap::new();
+        for node in &self.nodes {
+            grouped
+                .entry(node.node_type.clone())
+                .or_insert_with(Vec::new)
+                .push(node);
+        }
+        grouped
+    }
+
+    /// 生成 DOT 格式的图表示（用于 Graphviz）
+    pub fn to_dot(&self) -> String {
+        let mut dot = String::new();
+        dot.push_str("digraph DependencyGraph {\n");
+        dot.push_str("    rankdir=TB;\n");
+        dot.push_str("    node [shape=box, style=rounded];\n\n");
+
+        // 添加节点
+        for node in &self.nodes {
+            let color = match node.node_type {
+                DependencyNodeType::Function => "lightblue",
+                DependencyNodeType::Type => "lightgreen",
+                DependencyNodeType::Constant => "lightyellow",
+                DependencyNodeType::Variable => "lightpink",
+                DependencyNodeType::Import => "lightgray",
+                DependencyNodeType::Module => "lightcyan",
+            };
+
+            let style = if node.is_change_target {
+                "filled,bold"
+            } else {
+                "filled"
+            };
+
+            dot.push_str(&format!(
+                "    \"{}\" [label=\"{}\", fillcolor={}, style={}];\n",
+                node.id, node.name, color, style
+            ));
+        }
+
+        dot.push('\n');
+
+        // 添加边
+        for edge in &self.edges {
+            let color = match edge.edge_type {
+                DependencyEdgeType::FunctionCall => "blue",
+                DependencyEdgeType::TypeUsage => "green",
+                DependencyEdgeType::ConstantReference => "orange",
+                DependencyEdgeType::VariableReference => "red",
+                DependencyEdgeType::ImportDependency => "gray",
+                DependencyEdgeType::ModuleDependency => "purple",
+            };
+
+            dot.push_str(&format!(
+                "    \"{}\" -> \"{}\" [color={}];\n",
+                edge.from, edge.to, color
+            ));
+        }
+
+        dot.push_str("}\n");
+        dot
+    }
+
+    /// 生成文本格式的依赖树
+    pub fn to_text_tree(&self) -> String {
+        let mut result = String::new();
+        let root_node = self.nodes.iter().find(|n| n.id == self.root_node);
+
+        if let Some(root) = root_node {
+            result.push_str(&format!("Dependency Tree for: {}\n", root.name));
+            result.push_str("=".repeat(50).as_str());
+            result.push('\n');
+
+            self.build_text_tree(&mut result, &self.root_node, 0, &mut HashSet::new());
+        }
+
+        result
+    }
+
+    /// 递归构建文本树
+    fn build_text_tree(
+        &self,
+        result: &mut String,
+        node_id: &str,
+        depth: usize,
+        visited: &mut HashSet<String>,
+    ) {
+        if visited.contains(node_id) {
+            return;
+        }
+        visited.insert(node_id.to_string());
+
+        if let Some(node) = self.nodes.iter().find(|n| n.id == node_id) {
+            let indent = "  ".repeat(depth);
+            let type_symbol = match node.node_type {
+                DependencyNodeType::Function => "🔧",
+                DependencyNodeType::Type => "📦",
+                DependencyNodeType::Constant => "🔢",
+                DependencyNodeType::Variable => "📊",
+                DependencyNodeType::Import => "📥",
+                DependencyNodeType::Module => "📁",
+            };
+
+            let marker = if node.is_change_target { "★ " } else { "" };
+
+            result.push_str(&format!(
+                "{}{}{} {} ({})\n",
+                indent,
+                marker,
+                type_symbol,
+                node.name,
+                format!("{:?}", node.node_type).to_lowercase()
+            ));
+
+            // 递归处理依赖
+            let dependencies = self.get_direct_dependencies(node_id);
+            for dep in dependencies {
+                self.build_text_tree(result, &dep.id, depth + 1, visited);
+            }
+        }
+    }
 }
 
 impl Default for SemanticContextExtractor {
@@ -2738,7 +3137,7 @@ mod tests {
         // 不应该包含内置类型
         assert!(!type_names.contains(&&"error".to_string()));
 
-        println!("提取的类型: {:?}", type_names);
+        println!("提取的类型: {type_names:?}");
         println!("上下文统计: {:?}", context.get_stats());
     }
 

@@ -102,6 +102,7 @@ fn test_code_slice_generator_with_config() {
         include_imports: false,
         include_types: false,
         include_dependent_functions: false,
+        include_dependency_graph: false,
         max_lines: Some(100),
         output_format: OutputFormat::Markdown,
         highlight_style: HighlightStyle::Separate,
@@ -683,7 +684,7 @@ fn test_generate_function_block_with_signature() {
     assert!(content.contains("return &Service{"));
     assert!(content.contains("config: config,"));
 
-    println!("Generated function block content:\n{}", content);
+    println!("Generated function block content:\n{content}");
 }
 
 #[test]
@@ -715,7 +716,7 @@ fn test_function_body_with_existing_braces() {
     };
 
     let complete_definition = generator.build_complete_function_definition(&function_with_braces);
-    println!("Function with existing braces:\n{}", complete_definition);
+    println!("Function with existing braces:\n{complete_definition}");
 
     // 检查是否有重复的大括号
     let brace_count = complete_definition.matches('{').count();
@@ -762,7 +763,7 @@ fn test_function_body_without_braces() {
 
     let complete_definition =
         generator.build_complete_function_definition(&function_without_braces);
-    println!("Function without existing braces:\n{}", complete_definition);
+    println!("Function without existing braces:\n{complete_definition}");
 
     // 应该正确添加大括号
     assert!(complete_definition.starts_with("func simpleFunc() string {"));
@@ -796,7 +797,7 @@ fn test_empty_function_body() {
     };
 
     let complete_definition = generator.build_complete_function_definition(&empty_function);
-    println!("Empty function:\n{}", complete_definition);
+    println!("Empty function:\n{complete_definition}");
 
     // 应该生成正确的空函数
     let expected = "func emptyFunc() {\n}";
@@ -852,7 +853,7 @@ fn test_function_with_complex_body() {
     };
 
     let complete_definition = generator.build_complete_function_definition(&complex_function);
-    println!("Complex function:\n{}", complete_definition);
+    println!("Complex function:\n{complete_definition}");
 
     // 验证函数签名正确
     assert!(

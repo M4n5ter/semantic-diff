@@ -105,6 +105,13 @@ pub struct Cli {
         value_parser = clap::value_parser!(u32)
     )]
     pub max_lines: Option<u32>,
+
+    /// 显示依赖图
+    #[arg(
+        long = "show-dependencies",
+        help = "Include dependency graph in the output"
+    )]
+    pub show_dependencies: bool,
 }
 
 /// 输出格式命令行参数
@@ -160,6 +167,8 @@ pub struct Config {
     pub functions_only: bool,
     /// 最大输出行数
     pub max_lines: Option<u32>,
+    /// 是否显示依赖图
+    pub show_dependencies: bool,
 }
 
 impl From<OutputFormatArg> for OutputFormat {
@@ -196,6 +205,7 @@ impl From<Cli> for Config {
             output_file: cli.output_file,
             functions_only: cli.functions_only,
             max_lines: cli.max_lines,
+            show_dependencies: cli.show_dependencies,
         }
     }
 }

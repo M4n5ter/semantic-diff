@@ -41,6 +41,7 @@ fn create_test_code_slice() -> CodeSlice {
         line_mapping: [(11, 5)].iter().cloned().collect(),
         involved_files: vec![PathBuf::from("test.go")],
         content: "// Test code slice\n// Generated for testing\n\nimport \"fmt\"\n\ntype TestStruct struct {\n    Field string\n}\n\nconst TestConst = \"test\"\n\nvar TestVar string\n\nfunc TestFunction(param1 string) error {\n    return nil\n}".to_string(),
+        dependency_graph: None,
     }
 }
 
@@ -403,6 +404,7 @@ fn test_empty_code_slice() {
         line_mapping: std::collections::HashMap::new(),
         involved_files: vec![],
         content: String::new(),
+        dependency_graph: None,
     };
 
     let renderer = OutputRenderer::with_default_config();

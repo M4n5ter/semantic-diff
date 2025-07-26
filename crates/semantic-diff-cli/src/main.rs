@@ -365,6 +365,7 @@ fn create_code_generator(config: &Config) -> semantic_diff_core::CodeSliceGenera
         include_imports: true,
         include_types: true,
         include_dependent_functions: !config.functions_only,
+        include_dependency_graph: config.show_dependencies,
         max_lines: config.max_lines.map(|n| n as usize),
         output_format: config.output_format.clone(),
         highlight_style: config.highlight_style.clone(),
@@ -471,6 +472,24 @@ fn format_and_output(code_slices: &[semantic_diff_core::CodeSlice], config: &Con
         // 使用渲染器处理
         let rendered_output = renderer.render(slice)?;
         final_output.push_str(&rendered_output.content);
+
+        // 添加依赖图（如果启用）
+        if config.show_dependencies {
+            if let Some(dependency_graph) = &slice.dependency_graph {
+                final_output.push_str("\n\n");
+                final_output.push_str("// Dependency Graph\n");
+                final_output.push_str("// ================\n");
+                final_output.push_str(&dependency_graph.to_text_tree());
+
+                // 如果是详细模式，还可以输出 DOT 格式
+                if config.verbose {
+                    final_output.push_str("\n\n// DOT Format (for Graphviz):\n");
+                    final_output.push_str("// ");
+                    final_output.push_str(&dependency_graph.to_dot().replace('\n', "\n// "));
+                    final_output.push('\n');
+                }
+            }
+        }
 
         // 添加统计信息（如果启用详细模式）
         if config.verbose {

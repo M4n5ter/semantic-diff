@@ -32,6 +32,8 @@ pub struct GeneratorConfig {
     pub include_types: bool,
     /// 是否包含依赖函数
     pub include_dependent_functions: bool,
+    /// 是否包含依赖图
+    pub include_dependency_graph: bool,
     /// 最大行数限制
     pub max_lines: Option<usize>,
     /// 输出格式
@@ -63,6 +65,8 @@ pub struct CodeSlice {
     pub involved_files: Vec<PathBuf>,
     /// 生成的完整代码内容
     pub content: String,
+    /// 依赖图
+    pub dependency_graph: Option<crate::extractor::DependencyGraph>,
 }
 
 /// 输出格式
@@ -115,6 +119,7 @@ impl Default for GeneratorConfig {
             include_imports: true,
             include_types: true,
             include_dependent_functions: true,
+            include_dependency_graph: false,
             max_lines: None,
             output_format: OutputFormat::PlainText,
             highlight_style: HighlightStyle::Inline,
@@ -199,12 +204,22 @@ impl CodeSliceGenerator {
         // 8. 应用变更高亮
         self.apply_change_highlighting(&mut code_blocks, changes)?;
 
-        // 9. 生成最终的代码切片
-        let code_slice = self.build_code_slice(
+        // 9. 生成依赖图
+        let dependency_graph = if self.config.include_dependency_graph {
+            Some(context.generate_dependency_graph())
+        } else {
+            None
+        };
+
+        // 10. 生成最终的代码切片
+        let mut code_slice = self.build_code_slice(
             header_comment,
             code_blocks,
             involved_files.into_iter().collect(),
         )?;
+
+        // 添加依赖图
+        code_slice.dependency_graph = dependency_graph;
 
         Ok(code_slice)
     }
@@ -636,6 +651,7 @@ impl CodeSliceGenerator {
             line_mapping,
             involved_files,
             content,
+            dependency_graph: None, // 将在 generate_slice 中设置
         })
     }
 }
