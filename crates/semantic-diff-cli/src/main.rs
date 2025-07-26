@@ -78,11 +78,6 @@ fn run(config: Config) -> Result<()> {
         config.repo_path.display()
     );
 
-    // 显示分析开始信息
-    if !config.verbose {
-        eprintln!("Analyzing commit {}...", config.commit_hash);
-    }
-
     // 1. 初始化 Git 解析器
     debug!("Initializing Git diff parser");
     let git_parser = semantic_diff_core::GitDiffParser::new(config.repo_path.clone())?;
@@ -527,17 +522,31 @@ fn validate_and_load_config(config: &Config) -> Result<()> {
         )));
     }
 
-    // 验证输出文件路径（如果指定）
+    // 验证并创建输出文件路径（如果指定）
     if let Some(output_file) = &config.output_file {
+        debug!("Output file specified: {}", output_file.display());
         if let Some(parent) = output_file.parent() {
-            if !parent.exists() {
-                return Err(semantic_diff_core::SemanticDiffError::IoError(
-                    std::io::Error::new(
-                        std::io::ErrorKind::NotFound,
-                        format!("Output directory does not exist: {}", parent.display()),
-                    ),
-                ));
+            debug!("Parent directory: {}", parent.display());
+            debug!("Parent is empty: {}", parent.as_os_str().is_empty());
+            debug!("Parent exists: {}", parent.exists());
+
+            // 只有当父目录不是空路径时才检查和创建
+            if !parent.as_os_str().is_empty() && !parent.exists() {
+                debug!("Creating output directory: {}", parent.display());
+                std::fs::create_dir_all(parent).map_err(|e| {
+                    semantic_diff_core::SemanticDiffError::IoError(std::io::Error::new(
+                        e.kind(),
+                        format!(
+                            "Failed to create output directory {}: {}",
+                            parent.display(),
+                            e
+                        ),
+                    ))
+                })?;
+                info!("Created output directory: {}", parent.display());
             }
+        } else {
+            debug!("No parent directory for output file");
         }
     }
 

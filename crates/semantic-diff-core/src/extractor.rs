@@ -508,7 +508,15 @@ impl SemanticContextExtractor {
         let mut constants = Vec::new();
         let mut required_imports = HashSet::new();
 
-        // 1. 提取函数的直接依赖
+        // 1. 首先提取函数签名中的类型依赖
+        self.extract_function_signature_dependencies(
+            function,
+            source_files,
+            &mut related_types,
+            &mut processed_types,
+        )?;
+
+        // 2. 提取函数体中的直接依赖
         let direct_dependencies = self
             .dependency_resolver
             .extract_function_dependencies(function, source_files);
@@ -516,7 +524,7 @@ impl SemanticContextExtractor {
             .dependency_resolver
             .filter_internal_dependencies(&direct_dependencies);
 
-        // 2. 递归提取类型定义
+        // 3. 递归提取类型定义
         for dependency in &internal_dependencies {
             if dependency.dependency_type == DependencyType::Type {
                 self.extract_type_recursively(
@@ -529,7 +537,7 @@ impl SemanticContextExtractor {
             }
         }
 
-        // 3. 提取依赖函数
+        // 4. 提取依赖函数
         for dependency in &internal_dependencies {
             if dependency.dependency_type == DependencyType::Function {
                 if let Some(func_info) = self
@@ -538,13 +546,22 @@ impl SemanticContextExtractor {
                 {
                     if !processed_functions.contains(&func_info.name) {
                         processed_functions.insert(func_info.name.clone());
+
+                        // 递归提取依赖函数签名中的类型
+                        self.extract_function_signature_dependencies(
+                            &func_info,
+                            source_files,
+                            &mut related_types,
+                            &mut processed_types,
+                        )?;
+
                         dependent_functions.push(func_info);
                     }
                 }
             }
         }
 
-        // 4. 提取常量定义
+        // 5. 提取常量定义
         for dependency in &internal_dependencies {
             if dependency.dependency_type == DependencyType::Constant {
                 // 在源文件中查找常量定义
@@ -559,7 +576,7 @@ impl SemanticContextExtractor {
             }
         }
 
-        // 5. 收集必需的导入声明
+        // 6. 收集必需的导入声明
         self.collect_required_imports(
             function,
             &related_types,
@@ -568,7 +585,7 @@ impl SemanticContextExtractor {
             &mut required_imports,
         )?;
 
-        // 6. 提取变量定义
+        // 7. 提取变量定义
         let mut variables = Vec::new();
         let mut processed_variables = HashSet::new();
         for dependency in &internal_dependencies {
@@ -583,7 +600,7 @@ impl SemanticContextExtractor {
             }
         }
 
-        // 7. 分析跨模块依赖
+        // 8. 分析跨模块依赖
         let cross_module_dependencies = self.analyze_cross_module_dependencies(
             source_files,
             &related_types,
@@ -1249,6 +1266,36 @@ impl SemanticContextExtractor {
         false
     }
 
+    /// 检查 GoType 是否匹配指定的类型名称
+    ///
+    /// 处理指针类型、切片类型等复杂情况
+    fn type_matches(&self, go_type: &crate::parser::GoType, type_name: &str) -> bool {
+        // 直接匹配类型名称
+        if go_type.name == type_name {
+            return true;
+        }
+
+        // 如果是指针类型，检查基础类型
+        if go_type.is_pointer && go_type.name == type_name {
+            return true;
+        }
+
+        // 如果是切片类型，检查元素类型
+        if go_type.is_slice && go_type.name == type_name {
+            return true;
+        }
+
+        // 处理复合类型，如 map[string]TypeName 中的 TypeName
+        if go_type.name.contains(type_name) {
+            // 使用正则表达式进行更精确的匹配
+            if let Ok(re) = regex::Regex::new(&format!(r"\b{}\b", regex::escape(type_name))) {
+                return re.is_match(&go_type.name);
+            }
+        }
+
+        false
+    }
+
     /// 查找指定类型的常量
     fn find_constants_of_type(
         &self,
@@ -1315,23 +1362,23 @@ impl SemanticContextExtractor {
 
     /// 检查函数是否使用指定类型
     fn function_uses_type(&self, function: &GoFunctionInfo, type_name: &str) -> bool {
-        // 检查参数类型
-        for param in &function.parameters {
-            if param.param_type.name == type_name {
-                return true;
-            }
-        }
-
-        // 检查返回类型
-        for return_type in &function.return_types {
-            if return_type.name == type_name {
-                return true;
-            }
-        }
-
         // 检查接收者类型
         if let Some(receiver) = &function.receiver {
             if receiver.type_name == type_name {
+                return true;
+            }
+        }
+
+        // 检查参数类型（包括指针和切片类型）
+        for param in &function.parameters {
+            if self.type_matches(&param.param_type, type_name) {
+                return true;
+            }
+        }
+
+        // 检查返回类型（包括指针和切片类型）
+        for return_type in &function.return_types {
+            if self.type_matches(return_type, type_name) {
                 return true;
             }
         }
@@ -1951,9 +1998,70 @@ impl SemanticContextExtractor {
         Ok(missing_dependencies)
     }
 
+    /// 提取函数签名中的类型依赖（递归）
+    ///
+    /// 这个方法专门处理函数签名中的类型依赖，包括参数类型、返回类型和接收者类型
+    fn extract_function_signature_dependencies(
+        &self,
+        function: &GoFunctionInfo,
+        source_files: &[SourceFile],
+        related_types: &mut Vec<GoTypeDefinition>,
+        processed_types: &mut HashSet<String>,
+    ) -> Result<()> {
+        // 1. 提取接收者类型依赖
+        if let Some(receiver) = &function.receiver {
+            if !self.is_builtin_type(&receiver.type_name) {
+                self.extract_type_recursively(
+                    &receiver.type_name,
+                    source_files,
+                    related_types,
+                    processed_types,
+                    0,
+                )?;
+            }
+        }
+
+        // 2. 提取参数类型依赖
+        for param in &function.parameters {
+            let type_name = &param.param_type.name;
+            if !self.is_builtin_type(type_name) {
+                self.extract_type_recursively(
+                    type_name,
+                    source_files,
+                    related_types,
+                    processed_types,
+                    0,
+                )?;
+            }
+        }
+
+        // 3. 提取返回类型依赖
+        for return_type in &function.return_types {
+            let type_name = &return_type.name;
+            if !self.is_builtin_type(type_name) {
+                self.extract_type_recursively(
+                    type_name,
+                    source_files,
+                    related_types,
+                    processed_types,
+                    0,
+                )?;
+            }
+        }
+
+        Ok(())
+    }
+
     /// 从函数中提取类型引用
     fn extract_type_references_from_function(&self, function: &GoFunctionInfo) -> Vec<String> {
         let mut type_refs = Vec::new();
+
+        // 从接收者类型中提取
+        if let Some(receiver) = &function.receiver {
+            if !self.is_builtin_type(&receiver.type_name) {
+                type_refs.push(receiver.type_name.clone());
+            }
+        }
 
         // 从参数类型中提取
         for param in &function.parameters {
@@ -2543,5 +2651,134 @@ mod tests {
         assert!(result.is_ok());
         // 由于递归深度限制，不会提取所有类型
         assert!(result_types.len() <= 3);
+    }
+
+    #[test]
+    fn test_function_signature_dependencies() {
+        // 测试函数签名依赖提取
+        let extractor = SemanticContextExtractor::new();
+
+        // 创建带有复杂签名的函数
+        let function = GoFunctionInfo {
+            name: "processData".to_string(),
+            receiver: Some(crate::parser::GoReceiverInfo {
+                name: "s".to_string(),
+                type_name: "Service".to_string(),
+                is_pointer: true,
+            }),
+            parameters: vec![
+                GoParameter {
+                    name: "user".to_string(),
+                    param_type: GoType {
+                        name: "User".to_string(),
+                        is_pointer: false,
+                        is_slice: false,
+                    },
+                },
+                GoParameter {
+                    name: "configs".to_string(),
+                    param_type: GoType {
+                        name: "Config".to_string(),
+                        is_pointer: false,
+                        is_slice: true,
+                    },
+                },
+            ],
+            return_types: vec![
+                GoType {
+                    name: "Result".to_string(),
+                    is_pointer: true,
+                    is_slice: false,
+                },
+                GoType {
+                    name: "error".to_string(),
+                    is_pointer: false,
+                    is_slice: false,
+                },
+            ],
+            body: "return &Result{}, nil".to_string(),
+            start_line: 1,
+            end_line: 3,
+            file_path: PathBuf::from("service.go"),
+        };
+
+        // 创建相关的类型定义
+        let service_type = create_test_type("Service", "type Service struct { Name string }");
+        let user_type = create_test_type("User", "type User struct { ID int; Name string }");
+        let config_type = create_test_type("Config", "type Config struct { Host string }");
+        let result_type = create_test_type("Result", "type Result struct { Data string }");
+
+        let source_file = create_test_source_file(
+            "main",
+            vec![
+                GoDeclaration::Type(service_type),
+                GoDeclaration::Type(user_type),
+                GoDeclaration::Type(config_type),
+                GoDeclaration::Type(result_type),
+            ],
+        );
+
+        let context = extractor
+            .extract_context(&function, &[source_file])
+            .unwrap();
+
+        // 验证提取的上下文包含签名中的所有类型
+        let type_names: Vec<_> = context.related_types.iter().map(|t| &t.name).collect();
+
+        // 应该包含接收者类型
+        assert!(type_names.contains(&&"Service".to_string()));
+
+        // 应该包含参数类型
+        assert!(type_names.contains(&&"User".to_string()));
+        assert!(type_names.contains(&&"Config".to_string()));
+
+        // 应该包含返回类型（除了内置的 error 类型）
+        assert!(type_names.contains(&&"Result".to_string()));
+
+        // 不应该包含内置类型
+        assert!(!type_names.contains(&&"error".to_string()));
+
+        println!("提取的类型: {:?}", type_names);
+        println!("上下文统计: {:?}", context.get_stats());
+    }
+
+    #[test]
+    fn test_type_matches() {
+        // 测试类型匹配功能
+        let extractor = SemanticContextExtractor::new();
+
+        // 测试直接匹配
+        let simple_type = GoType {
+            name: "User".to_string(),
+            is_pointer: false,
+            is_slice: false,
+        };
+        assert!(extractor.type_matches(&simple_type, "User"));
+        assert!(!extractor.type_matches(&simple_type, "Config"));
+
+        // 测试指针类型
+        let pointer_type = GoType {
+            name: "User".to_string(),
+            is_pointer: true,
+            is_slice: false,
+        };
+        assert!(extractor.type_matches(&pointer_type, "User"));
+
+        // 测试切片类型
+        let slice_type = GoType {
+            name: "User".to_string(),
+            is_pointer: false,
+            is_slice: true,
+        };
+        assert!(extractor.type_matches(&slice_type, "User"));
+
+        // 测试复合类型
+        let map_type = GoType {
+            name: "map[string]User".to_string(),
+            is_pointer: false,
+            is_slice: false,
+        };
+        assert!(extractor.type_matches(&map_type, "User"));
+        assert!(!extractor.type_matches(&map_type, "Config"));
     }
 }

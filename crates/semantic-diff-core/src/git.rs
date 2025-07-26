@@ -185,8 +185,19 @@ impl GitDiffParser {
                     ))
                 })?
                 .for_each_to_obtain_tree(&new_tree_obj, |change| {
-                    if let Ok(file_change) = self.process_object_tree_change(change, repo) {
-                        changes.push(file_change);
+                    match self.process_object_tree_change(change, repo) {
+                        Ok(file_change) => {
+                            changes.push(file_change);
+                        }
+                        Err(SemanticDiffError::GitError(msg))
+                            if msg.contains("Skipping non-file object") =>
+                        {
+                            // 忽略非文件对象（如目录），这是正常的
+                        }
+                        Err(e) => {
+                            // 其他错误应该被记录或处理
+                            eprintln!("Warning: Failed to process tree change: {e}");
+                        }
                     }
                     Ok::<_, gix::object::tree::diff::for_each::Error>(
                         gix::object::tree::diff::Action::Continue,
@@ -250,10 +261,17 @@ impl GitDiffParser {
         match change {
             Change::Addition {
                 location,
-                entry_mode: _,
+                entry_mode,
                 id,
                 relation: _,
             } => {
+                // 检查是否为文件（blob），跳过目录（tree）
+                if !entry_mode.is_blob() {
+                    return Err(SemanticDiffError::GitError(format!(
+                        "Skipping non-file object: {location} (mode: {entry_mode:?})"
+                    )));
+                }
+
                 let file_path = PathBuf::from(location.to_string());
                 let hunks = self.generate_added_file_hunks(id.into(), repo)?;
                 let is_binary = self.is_binary_file(id.into(), repo)?;
@@ -267,10 +285,17 @@ impl GitDiffParser {
             }
             Change::Deletion {
                 location,
-                entry_mode: _,
+                entry_mode,
                 id,
                 relation: _,
             } => {
+                // 检查是否为文件（blob），跳过目录（tree）
+                if !entry_mode.is_blob() {
+                    return Err(SemanticDiffError::GitError(format!(
+                        "Skipping non-file object: {location} (mode: {entry_mode:?})"
+                    )));
+                }
+
                 let file_path = PathBuf::from(location.to_string());
                 let hunks = self.generate_deleted_file_hunks(id.into(), repo)?;
                 let is_binary = self.is_binary_file(id.into(), repo)?;
@@ -284,11 +309,18 @@ impl GitDiffParser {
             }
             Change::Modification {
                 location,
-                previous_entry_mode: _,
+                previous_entry_mode,
                 previous_id,
-                entry_mode: _,
+                entry_mode,
                 id,
             } => {
+                // 检查是否为文件（blob），跳过目录（tree）
+                if !entry_mode.is_blob() || !previous_entry_mode.is_blob() {
+                    return Err(SemanticDiffError::GitError(format!(
+                        "Skipping non-file object: {location} (mode: {previous_entry_mode:?} -> {entry_mode:?})"
+                    )));
+                }
+
                 let file_path = PathBuf::from(location.to_string());
                 let hunks =
                     self.generate_modified_file_hunks(previous_id.into(), id.into(), repo)?;
@@ -305,15 +337,22 @@ impl GitDiffParser {
             Change::Rewrite {
                 source_location,
                 location,
-                source_entry_mode: _,
+                source_entry_mode,
                 source_id,
-                entry_mode: _,
+                entry_mode,
                 id,
                 diff: _,
                 copy,
                 source_relation: _,
                 relation: _,
             } => {
+                // 检查是否为文件（blob），跳过目录（tree）
+                if !entry_mode.is_blob() || !source_entry_mode.is_blob() {
+                    return Err(SemanticDiffError::GitError(format!(
+                        "Skipping non-file object: {source_location} -> {location} (mode: {source_entry_mode:?} -> {entry_mode:?})"
+                    )));
+                }
+
                 let file_path = PathBuf::from(location.to_string());
                 let old_path = PathBuf::from(source_location.to_string());
 

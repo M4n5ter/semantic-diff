@@ -364,13 +364,125 @@ impl CodeSliceGenerator {
 
     /// 生成函数定义块
     fn generate_function_block(&self, function: &GoFunctionInfo) -> CodeBlock {
-        let lines = self.split_into_lines(&function.body, function.start_line);
+        // 构建完整的函数定义，包括签名和函数体
+        let full_function_definition = self.build_complete_function_definition(function);
+        let lines = self.split_into_lines(&full_function_definition, function.start_line);
 
         CodeBlock {
             title: format!("Function: {}", function.name),
             lines,
             block_type: BlockType::Function,
         }
+    }
+
+    /// 构建完整的函数定义（包括签名和函数体）
+    fn build_complete_function_definition(&self, function: &GoFunctionInfo) -> String {
+        let mut definition = String::new();
+
+        // 1. 构建函数签名
+        let signature = self.build_function_signature(function);
+        definition.push_str(&signature);
+
+        // 2. 检查函数体是否已经包含完整的大括号结构
+        let body = function.body.trim();
+        if body.is_empty() {
+            // 空函数体
+            definition.push_str(" {\n}");
+        } else if body.starts_with('{') && body.ends_with('}') {
+            // 函数体已经包含完整的大括号结构
+            definition.push(' ');
+            definition.push_str(body);
+        } else {
+            // 函数体不包含大括号，需要添加
+            definition.push_str(" {\n");
+
+            // 添加函数体（缩进处理）
+            for line in body.lines() {
+                if !line.trim().is_empty() {
+                    definition.push_str("    "); // 4个空格缩进
+                    definition.push_str(line);
+                }
+                definition.push('\n');
+            }
+
+            // 添加结束大括号
+            definition.push('}');
+        }
+
+        definition
+    }
+
+    /// 构建函数签名
+    fn build_function_signature(&self, function: &GoFunctionInfo) -> String {
+        let mut signature = String::new();
+
+        // 1. 添加 func 关键字
+        signature.push_str("func ");
+
+        // 2. 添加接收者（如果是方法）
+        if let Some(receiver) = &function.receiver {
+            signature.push('(');
+            signature.push_str(&receiver.name);
+            signature.push(' ');
+            if receiver.is_pointer {
+                signature.push('*');
+            }
+            signature.push_str(&receiver.type_name);
+            signature.push_str(") ");
+        }
+
+        // 3. 添加函数名
+        signature.push_str(&function.name);
+
+        // 4. 添加参数列表
+        signature.push('(');
+        for (i, param) in function.parameters.iter().enumerate() {
+            if i > 0 {
+                signature.push_str(", ");
+            }
+            signature.push_str(&param.name);
+            signature.push(' ');
+            if param.param_type.is_pointer {
+                signature.push('*');
+            }
+            if param.param_type.is_slice {
+                signature.push_str("[]");
+            }
+            signature.push_str(&param.param_type.name);
+        }
+        signature.push(')');
+
+        // 5. 添加返回类型
+        if !function.return_types.is_empty() {
+            signature.push(' ');
+            if function.return_types.len() == 1 {
+                let return_type = &function.return_types[0];
+                if return_type.is_pointer {
+                    signature.push('*');
+                }
+                if return_type.is_slice {
+                    signature.push_str("[]");
+                }
+                signature.push_str(&return_type.name);
+            } else {
+                signature.push('(');
+                for (i, return_type) in function.return_types.iter().enumerate() {
+                    if i > 0 {
+                        signature.push_str(", ");
+                    }
+                    if return_type.is_pointer {
+                        signature.push('*');
+                    }
+                    if return_type.is_slice {
+                        signature.push_str("[]");
+                    }
+                    signature.push_str(&return_type.name);
+                }
+                signature.push(')');
+            }
+        }
+
+        signature
     }
 
     /// 将文本分割为代码行

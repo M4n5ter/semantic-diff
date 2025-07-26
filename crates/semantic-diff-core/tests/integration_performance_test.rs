@@ -294,7 +294,7 @@ fn test_semantic_context_extractor_batch_processing() {
 fn test_performance_monitor() {
     let monitor = PerformanceMonitor::new();
 
-    // 模拟一些文件处理
+    // 模拟一些文件处理 ->
     monitor.record_file_processed(Duration::from_millis(100));
     monitor.record_file_processed(Duration::from_millis(200));
     monitor.record_error();

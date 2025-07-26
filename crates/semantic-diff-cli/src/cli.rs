@@ -241,14 +241,21 @@ impl Cli {
             )));
         }
 
-        // 验证输出文件路径 (如果指定)
+        // 验证并创建输出文件路径 (如果指定)
         if let Some(output_file) = &self.output_file {
             if let Some(parent) = output_file.parent() {
-                if !parent.exists() {
-                    return Err(SemanticDiffError::IoError(std::io::Error::new(
-                        std::io::ErrorKind::NotFound,
-                        format!("Output directory does not exist: {}", parent.display()),
-                    )));
+                // 只有当父目录不是空路径时才检查和创建
+                if !parent.as_os_str().is_empty() && !parent.exists() {
+                    std::fs::create_dir_all(parent).map_err(|e| {
+                        SemanticDiffError::IoError(std::io::Error::new(
+                            e.kind(),
+                            format!(
+                                "Failed to create output directory {}: {}",
+                                parent.display(),
+                                e
+                            ),
+                        ))
+                    })?;
                 }
             }
         }

@@ -486,3 +486,391 @@ fn test_line_matches_change() {
         "Should not match different content"
     );
 }
+
+#[test]
+fn test_build_function_signature() {
+    let generator = CodeSliceGenerator::new();
+
+    // 测试简单函数签名
+    let simple_function = GoFunctionInfo {
+        name: "simpleFunc".to_string(),
+        receiver: None,
+        parameters: vec![GoParameter {
+            name: "param1".to_string(),
+            param_type: GoType {
+                name: "string".to_string(),
+                is_pointer: false,
+                is_slice: false,
+            },
+        }],
+        return_types: vec![GoType {
+            name: "error".to_string(),
+            is_pointer: false,
+            is_slice: false,
+        }],
+        body: "return nil".to_string(),
+        start_line: 1,
+        end_line: 1,
+        file_path: PathBuf::from("test.go"),
+    };
+
+    let signature = generator.build_function_signature(&simple_function);
+    assert_eq!(signature, "func simpleFunc(param1 string) error");
+
+    // 测试方法签名（带接收者）
+    let method_function = GoFunctionInfo {
+        name: "methodFunc".to_string(),
+        receiver: Some(crate::parser::GoReceiverInfo {
+            name: "s".to_string(),
+            type_name: "Service".to_string(),
+            is_pointer: true,
+        }),
+        parameters: vec![
+            GoParameter {
+                name: "param1".to_string(),
+                param_type: GoType {
+                    name: "User".to_string(),
+                    is_pointer: false,
+                    is_slice: false,
+                },
+            },
+            GoParameter {
+                name: "param2".to_string(),
+                param_type: GoType {
+                    name: "Config".to_string(),
+                    is_pointer: true,
+                    is_slice: false,
+                },
+            },
+        ],
+        return_types: vec![
+            GoType {
+                name: "Result".to_string(),
+                is_pointer: true,
+                is_slice: false,
+            },
+            GoType {
+                name: "error".to_string(),
+                is_pointer: false,
+                is_slice: false,
+            },
+        ],
+        body: "return &Result{}, nil".to_string(),
+        start_line: 1,
+        end_line: 1,
+        file_path: PathBuf::from("service.go"),
+    };
+
+    let method_signature = generator.build_function_signature(&method_function);
+    assert_eq!(
+        method_signature,
+        "func (s *Service) methodFunc(param1 User, param2 *Config) (*Result, error)"
+    );
+
+    // 测试切片参数和返回类型
+    let slice_function = GoFunctionInfo {
+        name: "sliceFunc".to_string(),
+        receiver: None,
+        parameters: vec![GoParameter {
+            name: "items".to_string(),
+            param_type: GoType {
+                name: "string".to_string(),
+                is_pointer: false,
+                is_slice: true,
+            },
+        }],
+        return_types: vec![GoType {
+            name: "int".to_string(),
+            is_pointer: false,
+            is_slice: true,
+        }],
+        body: "return make([]int, len(items))".to_string(),
+        start_line: 1,
+        end_line: 1,
+        file_path: PathBuf::from("test.go"),
+    };
+
+    let slice_signature = generator.build_function_signature(&slice_function);
+    assert_eq!(slice_signature, "func sliceFunc(items []string) []int");
+}
+
+#[test]
+fn test_build_complete_function_definition() {
+    let generator = CodeSliceGenerator::new();
+
+    let function = GoFunctionInfo {
+        name: "processData".to_string(),
+        receiver: Some(crate::parser::GoReceiverInfo {
+            name: "s".to_string(),
+            type_name: "Service".to_string(),
+            is_pointer: true,
+        }),
+        parameters: vec![GoParameter {
+            name: "data".to_string(),
+            param_type: GoType {
+                name: "string".to_string(),
+                is_pointer: false,
+                is_slice: false,
+            },
+        }],
+        return_types: vec![GoType {
+            name: "error".to_string(),
+            is_pointer: false,
+            is_slice: false,
+        }],
+        body: "if data == \"\" {\n    return errors.New(\"empty data\")\n}\nreturn nil".to_string(),
+        start_line: 10,
+        end_line: 14,
+        file_path: PathBuf::from("service.go"),
+    };
+
+    let complete_definition = generator.build_complete_function_definition(&function);
+
+    let expected = "func (s *Service) processData(data string) error {\n    if data == \"\" {\n        return errors.New(\"empty data\")\n    }\n    return nil\n}";
+
+    assert_eq!(complete_definition, expected);
+
+    // 验证包含函数签名
+    assert!(complete_definition.contains("func (s *Service) processData(data string) error"));
+    // 验证包含函数体
+    assert!(complete_definition.contains("if data == \"\""));
+    assert!(complete_definition.contains("return nil"));
+}
+
+#[test]
+fn test_generate_function_block_with_signature() {
+    let generator = CodeSliceGenerator::new();
+
+    let function = GoFunctionInfo {
+        name: "NewService".to_string(),
+        receiver: None,
+        parameters: vec![GoParameter {
+            name: "config".to_string(),
+            param_type: GoType {
+                name: "Config".to_string(),
+                is_pointer: true,
+                is_slice: false,
+            },
+        }],
+        return_types: vec![GoType {
+            name: "Service".to_string(),
+            is_pointer: true,
+            is_slice: false,
+        }],
+        body: "return &Service{\n    config: config,\n}".to_string(),
+        start_line: 5,
+        end_line: 8,
+        file_path: PathBuf::from("service.go"),
+    };
+
+    let block = generator.generate_function_block(&function);
+
+    assert_eq!(block.title, "Function: NewService");
+    assert_eq!(block.block_type, BlockType::Function);
+
+    // 验证生成的代码块包含完整的函数定义
+    let content: String = block
+        .lines
+        .iter()
+        .map(|line| &line.content)
+        .cloned()
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    // 应该包含函数签名
+    assert!(content.contains("func NewService(config *Config) *Service"));
+    // 应该包含函数体
+    assert!(content.contains("return &Service{"));
+    assert!(content.contains("config: config,"));
+
+    println!("Generated function block content:\n{}", content);
+}
+
+#[test]
+fn test_function_body_with_existing_braces() {
+    let generator = CodeSliceGenerator::new();
+
+    // 测试函数体已经包含大括号的情况
+    let function_with_braces = GoFunctionInfo {
+        name: "processData".to_string(),
+        receiver: None,
+        parameters: vec![GoParameter {
+            name: "data".to_string(),
+            param_type: GoType {
+                name: "string".to_string(),
+                is_pointer: false,
+                is_slice: false,
+            },
+        }],
+        return_types: vec![GoType {
+            name: "error".to_string(),
+            is_pointer: false,
+            is_slice: false,
+        }],
+        // 注意：这里的函数体已经包含了完整的大括号
+        body: "{\n    if data == \"\" {\n        return errors.New(\"empty data\")\n    }\n    return nil\n}".to_string(),
+        start_line: 10,
+        end_line: 15,
+        file_path: PathBuf::from("test.go"),
+    };
+
+    let complete_definition = generator.build_complete_function_definition(&function_with_braces);
+    println!("Function with existing braces:\n{}", complete_definition);
+
+    // 检查是否有重复的大括号
+    let brace_count = complete_definition.matches('{').count();
+    let closing_brace_count = complete_definition.matches('}').count();
+
+    // 应该有合理数量的大括号：函数体开始1个，if语句1个
+    assert_eq!(brace_count, 2, "Should have exactly 2 opening braces");
+    assert_eq!(
+        closing_brace_count, 2,
+        "Should have exactly 2 closing braces"
+    );
+
+    // 不应该有连续的大括号
+    assert!(
+        !complete_definition.contains("{{"),
+        "Should not have consecutive opening braces"
+    );
+    assert!(
+        !complete_definition.contains("}}"),
+        "Should not have consecutive closing braces at the end"
+    );
+}
+
+#[test]
+fn test_function_body_without_braces() {
+    let generator = CodeSliceGenerator::new();
+
+    // 测试函数体不包含大括号的情况（只有函数体内容）
+    let function_without_braces = GoFunctionInfo {
+        name: "simpleFunc".to_string(),
+        receiver: None,
+        parameters: vec![],
+        return_types: vec![GoType {
+            name: "string".to_string(),
+            is_pointer: false,
+            is_slice: false,
+        }],
+        // 函数体只包含内容，没有大括号
+        body: "return \"hello world\"".to_string(),
+        start_line: 5,
+        end_line: 5,
+        file_path: PathBuf::from("test.go"),
+    };
+
+    let complete_definition =
+        generator.build_complete_function_definition(&function_without_braces);
+    println!("Function without existing braces:\n{}", complete_definition);
+
+    // 应该正确添加大括号
+    assert!(complete_definition.starts_with("func simpleFunc() string {"));
+    assert!(complete_definition.ends_with("}"));
+
+    // 检查大括号数量
+    let brace_count = complete_definition.matches('{').count();
+    let closing_brace_count = complete_definition.matches('}').count();
+
+    assert_eq!(brace_count, 1, "Should have exactly 1 opening brace");
+    assert_eq!(
+        closing_brace_count, 1,
+        "Should have exactly 1 closing brace"
+    );
+}
+
+#[test]
+fn test_empty_function_body() {
+    let generator = CodeSliceGenerator::new();
+
+    // 测试空函数体的情况
+    let empty_function = GoFunctionInfo {
+        name: "emptyFunc".to_string(),
+        receiver: None,
+        parameters: vec![],
+        return_types: vec![],
+        body: "".to_string(),
+        start_line: 1,
+        end_line: 1,
+        file_path: PathBuf::from("test.go"),
+    };
+
+    let complete_definition = generator.build_complete_function_definition(&empty_function);
+    println!("Empty function:\n{}", complete_definition);
+
+    // 应该生成正确的空函数
+    let expected = "func emptyFunc() {\n}";
+    assert_eq!(complete_definition, expected);
+}
+
+#[test]
+fn test_function_with_complex_body() {
+    let generator = CodeSliceGenerator::new();
+
+    // 测试包含复杂结构的函数体
+    let complex_function = GoFunctionInfo {
+        name: "complexFunc".to_string(),
+        receiver: Some(crate::parser::GoReceiverInfo {
+            name: "s".to_string(),
+            type_name: "Service".to_string(),
+            is_pointer: true,
+        }),
+        parameters: vec![
+            GoParameter {
+                name: "ctx".to_string(),
+                param_type: GoType {
+                    name: "Context".to_string(),
+                    is_pointer: false,
+                    is_slice: false,
+                },
+            },
+            GoParameter {
+                name: "req".to_string(),
+                param_type: GoType {
+                    name: "Request".to_string(),
+                    is_pointer: true,
+                    is_slice: false,
+                },
+            },
+        ],
+        return_types: vec![
+            GoType {
+                name: "Response".to_string(),
+                is_pointer: true,
+                is_slice: false,
+            },
+            GoType {
+                name: "error".to_string(),
+                is_pointer: false,
+                is_slice: false,
+            },
+        ],
+        body: "if req == nil {\n    return nil, errors.New(\"nil request\")\n}\n\nswitch req.Type {\ncase \"A\":\n    return s.handleA(ctx, req)\ncase \"B\":\n    return s.handleB(ctx, req)\ndefault:\n    return nil, errors.New(\"unknown type\")\n}".to_string(),
+        start_line: 10,
+        end_line: 20,
+        file_path: PathBuf::from("service.go"),
+    };
+
+    let complete_definition = generator.build_complete_function_definition(&complex_function);
+    println!("Complex function:\n{}", complete_definition);
+
+    // 验证函数签名正确
+    assert!(
+        complete_definition.contains(
+            "func (s *Service) complexFunc(ctx Context, req *Request) (*Response, error)"
+        )
+    );
+
+    // 验证函数体内容正确缩进
+    assert!(complete_definition.contains("    if req == nil {"));
+    assert!(complete_definition.contains("    switch req.Type {"));
+    assert!(complete_definition.contains("    case \"A\":"));
+
+    // 验证大括号平衡
+    let brace_count = complete_definition.matches('{').count();
+    let closing_brace_count = complete_definition.matches('}').count();
+    assert_eq!(
+        brace_count, closing_brace_count,
+        "Braces should be balanced"
+    );
+}
