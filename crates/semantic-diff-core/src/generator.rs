@@ -18,7 +18,6 @@ pub struct CodeSliceGenerator {
 /// 代码格式化器
 pub struct CodeFormatter {
     output_format: OutputFormat,
-    highlight_style: HighlightStyle,
 }
 
 /// 生成器配置
@@ -61,6 +60,8 @@ pub struct CodeSlice {
     pub highlighted_lines: Vec<u32>,
     /// 变更行的映射：原始行号 -> 切片中的行号
     pub line_mapping: HashMap<u32, u32>,
+    /// 行号到变更类型的映射
+    pub line_change_types: HashMap<u32, DiffLineType>,
     /// 涉及的文件路径
     pub involved_files: Vec<PathBuf>,
     /// 生成的完整代码内容
@@ -141,8 +142,7 @@ impl CodeSliceGenerator {
 
     /// 使用指定配置创建代码切片生成器
     pub fn with_config(config: GeneratorConfig) -> Self {
-        let formatter =
-            CodeFormatter::new(config.output_format.clone(), config.highlight_style.clone());
+        let formatter = CodeFormatter::new(config.output_format.clone());
         Self { formatter, config }
     }
 
@@ -211,11 +211,12 @@ impl CodeSliceGenerator {
             None
         };
 
-        // 10. 生成最终的代码切片
-        let mut code_slice = self.build_code_slice(
+        // 10. 生成最终的代码切片（包含 diff 信息）
+        let mut code_slice = self.build_code_slice_with_diff(
             header_comment,
             code_blocks,
             involved_files.into_iter().collect(),
+            changes,
         )?;
 
         // 添加依赖图
@@ -520,43 +521,47 @@ impl CodeSliceGenerator {
         code_blocks: &mut [CodeBlock],
         changes: &[DiffHunk],
     ) -> Result<()> {
-        // 收集所有需要高亮的变更行内容
-        let mut change_lines = Vec::new();
+        // 收集所有变更行，包括删除和添加的行
+        let mut added_lines = Vec::new();
+        let mut removed_lines = Vec::new();
 
         for change_hunk in changes {
             for diff_line in &change_hunk.lines {
-                // 只处理添加和删除的行
-                if matches!(
-                    diff_line.line_type,
-                    DiffLineType::Added | DiffLineType::Removed
-                ) {
-                    let change_content =
-                        diff_line.content.trim_start_matches(['+', '-', ' ']).trim();
+                let clean_content = diff_line.content.trim_start_matches(['+', '-', ' ']).trim();
 
-                    // 跳过空行和过短的内容
-                    if !change_content.is_empty() && change_content.len() > 2 {
-                        change_lines
-                            .push((change_content.to_string(), diff_line.line_type.clone()));
+                // 跳过空行和过短的内容
+                if clean_content.is_empty() || clean_content.len() <= 2 {
+                    continue;
+                }
+
+                match diff_line.line_type {
+                    DiffLineType::Added => {
+                        added_lines.push(clean_content.to_string());
+                    }
+                    DiffLineType::Removed => {
+                        removed_lines.push(clean_content.to_string());
+                    }
+                    DiffLineType::Context => {
+                        // 上下文行不需要特殊处理
                     }
                 }
             }
         }
 
-        // 在代码块中查找匹配的行
+        // 在代码块中查找匹配的行并标记变更类型
         for block in code_blocks.iter_mut() {
             for line in block.lines.iter_mut() {
                 let line_content = line.content.trim();
 
-                // 检查是否与任何变更行匹配
-                for (change_content, change_type) in &change_lines {
-                    if line_content == change_content {
-                        // 使用更严格的匹配条件
-                        if self.should_highlight_change(change_content) {
-                            line.is_highlighted = true;
-                            line.change_type = Some(change_type.clone());
-                            break;
-                        }
-                    }
+                // 检查是否是添加的行
+                if added_lines.contains(&line_content.to_string()) {
+                    line.is_highlighted = true;
+                    line.change_type = Some(DiffLineType::Added);
+                }
+                // 检查是否是删除的行（虽然删除的行通常不在新版本中，但可能在上下文中）
+                else if removed_lines.contains(&line_content.to_string()) {
+                    line.is_highlighted = true;
+                    line.change_type = Some(DiffLineType::Removed);
                 }
             }
         }
@@ -566,16 +571,13 @@ impl CodeSliceGenerator {
 
     /// 检查变更是否足够重要以进行高亮
     fn is_significant_change(&self, change_content: &str) -> bool {
-        // 跳过过短的内容
-        if change_content.len() < 5 {
-            return false;
+        // 允许空行，因为它们在 diff 中可能很重要
+        if change_content.is_empty() {
+            return true;
         }
 
-        // 跳过只包含符号的行
-        if change_content
-            .chars()
-            .all(|c| "{}()[];,".contains(c) || c.is_whitespace())
-        {
+        // 跳过过短的内容，但允许一些重要的短内容
+        if change_content.len() < 3 {
             return false;
         }
 
@@ -588,102 +590,16 @@ impl CodeSliceGenerator {
             return false;
         }
 
-        // 包含关键字或标识符的行更可能是重要变更
-        let has_keywords = change_content.contains("case ")
-            || change_content.contains("func ")
-            || change_content.contains("type ")
-            || change_content.contains("var ")
-            || change_content.contains("const ")
-            || change_content.contains("import ")
-            || change_content.contains("if ")
-            || change_content.contains("for ")
-            || change_content.contains("switch ");
-
-        let has_function_call = change_content.contains("(") && change_content.contains(")");
-        let has_assignment = change_content.contains("=") || change_content.contains(":=");
-        let has_comment = change_content.contains("//");
-
-        has_keywords || has_function_call || has_assignment || has_comment
-    }
-
-    /// 验证上下文匹配以提高匹配精度
-    fn verify_context_match(
-        &self,
-        lines: &[CodeLine],
-        target_index: usize,
-        context: &[String],
-    ) -> bool {
-        // 如果没有上下文信息，直接返回 true（降级到简单匹配）
-        if context.is_empty() {
-            return true;
-        }
-
-        // 检查前后几行是否包含上下文中的任何一行
-        let search_range = 3; // 在目标行前后3行内搜索上下文
-        let start = target_index.saturating_sub(search_range);
-        let end = (target_index + search_range + 1).min(lines.len());
-
-        for ctx_line in context {
-            for (i, line) in lines.iter().enumerate().take(end).skip(start) {
-                if i != target_index && line.content.trim() == ctx_line.trim() {
-                    return true;
-                }
-            }
-        }
-
-        // 如果找不到上下文匹配，但变更内容足够独特，仍然可以匹配
-        let target_content = lines[target_index].content.trim();
-        self.is_unique_enough_for_highlighting(target_content)
-    }
-
-    /// 检查内容是否足够独特，可以在没有上下文的情况下进行高亮
-    fn is_unique_enough_for_highlighting(&self, content: &str) -> bool {
-        // 包含特定关键字的行通常是独特的
-        content.contains("ThinkingDelta")
-            || content.contains("Reasoning:")
-            || content.contains("// 只有当有实际内容时才发送")
-            || content.contains("chunk.Reasoning.IsSome()")
-            || (content.contains("case ") && content.contains("Delta:"))
-            || (content.contains("if ")
-                && content.contains("len(")
-                && content.contains("ContentParts"))
-    }
-
-    /// 更严格的变更匹配逻辑
-    fn should_highlight_change(&self, content: &str) -> bool {
-        // 只高亮真正重要且独特的变更
-        if !self.is_significant_change(content) {
+        // 跳过只包含符号的行
+        if change_content
+            .chars()
+            .all(|c| "{}()[];,".contains(c) || c.is_whitespace())
+        {
             return false;
         }
 
-        // 进一步过滤：只高亮包含特定模式的行
-        let important_patterns = [
-            "ThinkingDelta",
-            "Reasoning:",
-            "只有当有实际内容时才发送",
-            "chunk.Reasoning.IsSome()",
-            "ContentParts",
-        ];
-
-        // 如果包含重要模式，直接高亮
-        if important_patterns
-            .iter()
-            .any(|&pattern| content.contains(pattern))
-        {
-            return true;
-        }
-
-        // 对于 case 语句，只有当它是新的 case 时才高亮
-        if content.contains("case ") && content.contains("Delta:") {
-            return true;
-        }
-
-        // 对于条件语句，只有当它包含特定逻辑时才高亮
-        if content.contains("if ") && (content.contains("len(") || content.contains("IsSome")) {
-            return true;
-        }
-
-        false
+        // 其他内容认为是重要的
+        true
     }
 
     /// 检查行是否应该被高亮
@@ -706,6 +622,7 @@ impl CodeSliceGenerator {
     }
 
     /// 构建最终的代码切片
+    #[allow(dead_code)]
     fn build_code_slice(
         &self,
         header_comment: String,
@@ -720,6 +637,7 @@ impl CodeSliceGenerator {
         let mut variables = Vec::new();
         let mut highlighted_lines = Vec::new();
         let mut line_mapping = HashMap::new();
+        let mut line_change_types = HashMap::new();
         let mut current_line = 1u32;
 
         // 添加头部注释
@@ -742,9 +660,12 @@ impl CodeSliceGenerator {
                 // 记录行映射
                 line_mapping.insert(line.line_number, current_line);
 
-                // 记录高亮行
+                // 记录高亮行和变更类型
                 if line.is_highlighted {
                     highlighted_lines.push(current_line);
+                    if let Some(change_type) = &line.change_type {
+                        line_change_types.insert(current_line, change_type.clone());
+                    }
                 }
 
                 current_line += 1;
@@ -775,6 +696,7 @@ impl CodeSliceGenerator {
             variables,
             highlighted_lines,
             line_mapping,
+            line_change_types,
             involved_files,
             content,
             dependency_graph: None, // 将在 generate_slice 中设置
@@ -782,21 +704,326 @@ impl CodeSliceGenerator {
 
         Ok(code_slice)
     }
+
+    /// 从 diff hunks 中构建包含删除和添加行的代码切片
+    fn build_code_slice_with_diff(
+        &self,
+        header_comment: String,
+        code_blocks: Vec<CodeBlock>,
+        involved_files: Vec<PathBuf>,
+        diff_hunks: &[DiffHunk],
+    ) -> Result<CodeSlice> {
+        let mut content_parts = Vec::new();
+        let mut imports = Vec::new();
+        let mut type_definitions = Vec::new();
+        let mut function_definitions = Vec::new();
+        let mut constants = Vec::new();
+        let mut variables = Vec::new();
+        let mut highlighted_lines = Vec::new();
+        let mut line_mapping = HashMap::new();
+        let mut line_change_types = HashMap::new();
+        let mut current_line = 1u32;
+
+        // 添加头部注释
+        content_parts.push(header_comment.clone());
+        current_line += header_comment.lines().count() as u32;
+
+        // 处理每个代码块，直接从 diff 构建内容
+        for block in code_blocks {
+            // 添加块标题注释
+            let block_comment = format!("\n// {}\n", block.title);
+            content_parts.push(block_comment.clone());
+            current_line += block_comment.lines().count() as u32;
+
+            // 构建包含 diff 信息的块内容
+            let mut block_content = String::new();
+            let diff_aware_lines = self.build_diff_aware_lines(&block, diff_hunks)?;
+
+            for line in &diff_aware_lines {
+                block_content.push_str(&line.content);
+                block_content.push('\n');
+
+                // 记录行映射
+                line_mapping.insert(line.line_number, current_line);
+
+                // 记录高亮行和变更类型
+                if line.is_highlighted {
+                    highlighted_lines.push(current_line);
+                    if let Some(change_type) = &line.change_type {
+                        line_change_types.insert(current_line, change_type.clone());
+                    }
+                }
+
+                current_line += 1;
+            }
+
+            content_parts.push(block_content.clone());
+
+            // 按类型分类存储
+            match block.block_type {
+                BlockType::Import => imports.push(block_content),
+                BlockType::Type => type_definitions.push(block_content),
+                BlockType::Function => function_definitions.push(block_content),
+                BlockType::Constant => constants.push(block_content),
+                BlockType::Variable => variables.push(block_content),
+            }
+        }
+
+        // 生成最终内容
+        let raw_content = content_parts.join("");
+        let content = self.formatter.format_content(&raw_content)?;
+
+        let code_slice = CodeSlice {
+            header_comment,
+            imports,
+            type_definitions,
+            function_definitions,
+            constants,
+            variables,
+            highlighted_lines,
+            line_mapping,
+            line_change_types,
+            involved_files,
+            content,
+            dependency_graph: None, // 将在 generate_slice 中设置
+        };
+
+        Ok(code_slice)
+    }
+
+    /// 构建包含 diff 信息的行，避免重复
+    fn build_diff_aware_lines(
+        &self,
+        block: &CodeBlock,
+        diff_hunks: &[DiffHunk],
+    ) -> Result<Vec<CodeLine>> {
+        let mut result_lines = Vec::new();
+        let mut line_counter = 1u32;
+
+        // 收集所有 diff 行并按位置排序
+        let mut all_diff_lines = Vec::new();
+        for hunk in diff_hunks {
+            for diff_line in &hunk.lines {
+                all_diff_lines.push(diff_line);
+            }
+        }
+
+        // 创建一个集合来跟踪已经处理的内容，避免重复
+        let mut processed_content = HashSet::new();
+
+        // 直接从 diff 中按顺序处理所有行
+        for diff_line in &all_diff_lines {
+            let clean_content = diff_line.content.trim_start_matches(['+', '-', ' ']).trim();
+
+            // 避免重复添加相同内容
+            if processed_content.contains(clean_content) {
+                continue;
+            }
+
+            // 检查这个 diff 行是否与当前代码块相关
+            let is_relevant = block.lines.iter().any(|block_line| {
+                let block_content = block_line.content.trim();
+                block_content == clean_content
+                    || self.is_content_related(block_content, clean_content)
+            });
+
+            if !is_relevant {
+                continue;
+            }
+
+            match diff_line.line_type {
+                DiffLineType::Removed => {
+                    result_lines.push(CodeLine {
+                        content: clean_content.to_string(),
+                        line_number: line_counter,
+                        is_highlighted: true,
+                        change_type: Some(DiffLineType::Removed),
+                    });
+                    processed_content.insert(clean_content.to_string());
+                    line_counter += 1;
+                }
+                DiffLineType::Added => {
+                    result_lines.push(CodeLine {
+                        content: clean_content.to_string(),
+                        line_number: line_counter,
+                        is_highlighted: true,
+                        change_type: Some(DiffLineType::Added),
+                    });
+                    processed_content.insert(clean_content.to_string());
+                    line_counter += 1;
+                }
+                DiffLineType::Context => {
+                    // 上下文行不需要特殊标记，但仍然添加
+                    result_lines.push(CodeLine {
+                        content: clean_content.to_string(),
+                        line_number: line_counter,
+                        is_highlighted: false,
+                        change_type: None,
+                    });
+                    processed_content.insert(clean_content.to_string());
+                    line_counter += 1;
+                }
+            }
+        }
+
+        // 如果没有找到相关的 diff 行，回退到原始代码块
+        if result_lines.is_empty() {
+            for original_line in &block.lines {
+                let mut updated_line = original_line.clone();
+                updated_line.line_number = line_counter;
+                result_lines.push(updated_line);
+                line_counter += 1;
+            }
+        }
+
+        Ok(result_lines)
+    }
+
+    /// 增强代码块，包含 diff 中的删除和添加行
+    #[allow(dead_code)]
+    fn enhance_block_with_diff(
+        &self,
+        block: &CodeBlock,
+        diff_hunks: &[DiffHunk],
+    ) -> Result<Vec<CodeLine>> {
+        let mut enhanced_lines = Vec::new();
+        let mut line_counter = 1u32;
+
+        // 收集所有相关的 diff 行，按行号排序
+        let mut diff_lines = Vec::new();
+        for hunk in diff_hunks {
+            for diff_line in &hunk.lines {
+                diff_lines.push(diff_line);
+            }
+        }
+
+        // 按新行号排序（如果有的话）
+        diff_lines.sort_by_key(|line| line.new_line_number.unwrap_or(u32::MAX));
+
+        // 创建一个映射，将原始行内容映射到 diff 行
+        let mut content_to_diff = std::collections::HashMap::new();
+        for diff_line in &diff_lines {
+            let clean_content = diff_line.content.trim_start_matches(['+', '-', ' ']).trim();
+            if !clean_content.is_empty() {
+                content_to_diff.insert(clean_content.to_string(), diff_line);
+            }
+        }
+
+        // 处理每个原始行，同时插入相关的删除行
+        for original_line in &block.lines {
+            let original_content = original_line.content.trim();
+
+            // 首先查找是否有相关的删除行需要在此行之前显示
+            for diff_line in &diff_lines {
+                if diff_line.line_type == DiffLineType::Removed {
+                    let diff_content = diff_line.content.trim_start_matches(['+', '-', ' ']).trim();
+
+                    // 如果删除的行与当前行相关（例如，被当前行替换）
+                    if self.is_content_related(original_content, diff_content) {
+                        enhanced_lines.push(CodeLine {
+                            content: diff_content.to_string(),
+                            line_number: line_counter,
+                            is_highlighted: true,
+                            change_type: Some(DiffLineType::Removed),
+                        });
+                        line_counter += 1;
+                    }
+                }
+            }
+
+            // 添加原始行，检查它是否是添加的行
+            let mut change_type = original_line.change_type.clone();
+            let mut is_highlighted = original_line.is_highlighted;
+
+            if let Some(diff_line) = content_to_diff.get(original_content) {
+                match diff_line.line_type {
+                    DiffLineType::Added => {
+                        change_type = Some(DiffLineType::Added);
+                        is_highlighted = true;
+                    }
+                    DiffLineType::Removed => {
+                        change_type = Some(DiffLineType::Removed);
+                        is_highlighted = true;
+                    }
+                    DiffLineType::Context => {
+                        // 上下文行不需要特殊处理
+                    }
+                }
+            }
+
+            enhanced_lines.push(CodeLine {
+                content: original_line.content.clone(),
+                line_number: line_counter,
+                is_highlighted,
+                change_type,
+            });
+            line_counter += 1;
+        }
+
+        // 最后，添加任何没有匹配到原始行的删除行
+        for diff_line in &diff_lines {
+            if diff_line.line_type == DiffLineType::Removed {
+                let diff_content = diff_line.content.trim_start_matches(['+', '-', ' ']).trim();
+
+                // 检查这个删除行是否已经被添加
+                let already_added = enhanced_lines.iter().any(|line| {
+                    line.content.trim() == diff_content
+                        && matches!(line.change_type, Some(DiffLineType::Removed))
+                });
+
+                if !already_added && self.is_significant_change(diff_content) {
+                    enhanced_lines.push(CodeLine {
+                        content: diff_content.to_string(),
+                        line_number: line_counter,
+                        is_highlighted: true,
+                        change_type: Some(DiffLineType::Removed),
+                    });
+                    line_counter += 1;
+                }
+            }
+        }
+
+        Ok(enhanced_lines)
+    }
+
+    /// 检查两个内容是否相关（用于匹配删除和添加的行）
+    fn is_content_related(&self, content1: &str, content2: &str) -> bool {
+        // 直接相等
+        if content1 == content2 {
+            return true;
+        }
+
+        // 如果其中一个是空行，检查另一个是否也是空行或接近空行
+        if content1.trim().is_empty() || content2.trim().is_empty() {
+            return content1.trim().is_empty() && content2.trim().is_empty();
+        }
+
+        // 检查是否包含相同的关键词
+        let words1: HashSet<&str> = content1.split_whitespace().collect();
+        let words2: HashSet<&str> = content2.split_whitespace().collect();
+
+        if words1.is_empty() || words2.is_empty() {
+            return false;
+        }
+
+        let intersection_count = words1.intersection(&words2).count();
+        let union_count = words1.union(&words2).count();
+
+        // 如果有超过30%的词汇重叠，认为是相关的（降低阈值）
+        union_count > 0 && (intersection_count as f64 / union_count as f64) > 0.3
+    }
 }
 
 impl Default for CodeFormatter {
     fn default() -> Self {
-        Self::new(OutputFormat::PlainText, HighlightStyle::Inline)
+        Self::new(OutputFormat::PlainText)
     }
 }
 
 impl CodeFormatter {
     /// 创建新的代码格式化器
-    pub fn new(output_format: OutputFormat, highlight_style: HighlightStyle) -> Self {
-        Self {
-            output_format,
-            highlight_style,
-        }
+    pub fn new(output_format: OutputFormat) -> Self {
+        Self { output_format }
     }
 
     /// 格式化内容
@@ -838,87 +1065,12 @@ impl CodeFormatter {
         result.push_str("</code></pre>\n");
         result
     }
-
-    /// 应用语法高亮
-    pub fn apply_syntax_highlighting(
-        &self,
-        content: &str,
-        highlighted_lines: &[u32],
-    ) -> Result<String> {
-        match self.highlight_style {
-            HighlightStyle::None => Ok(content.to_string()),
-            HighlightStyle::Inline => self.apply_inline_highlighting(content, highlighted_lines),
-            HighlightStyle::Separate => {
-                self.apply_separate_highlighting(content, highlighted_lines)
-            }
-        }
-    }
-
-    /// 应用内联高亮
-    fn apply_inline_highlighting(
-        &self,
-        content: &str,
-        highlighted_lines: &[u32],
-    ) -> Result<String> {
-        let lines: Vec<&str> = content.lines().collect();
-        let mut result = String::new();
-
-        for (index, line) in lines.iter().enumerate() {
-            let line_number = (index + 1) as u32;
-
-            if highlighted_lines.contains(&line_number) {
-                match self.output_format {
-                    OutputFormat::PlainText => {
-                        result.push_str(&format!("|CHANGED|> {line}\n"));
-                    }
-                    OutputFormat::Markdown => {
-                        // 在 Markdown 代码块中使用注释来标记高亮行
-                        result.push_str(&format!("// >>> CHANGED: \n{line}\n"));
-                    }
-                    OutputFormat::Html => {
-                        result.push_str(&format!("<mark>{line}</mark>\n"));
-                    }
-                }
-            } else {
-                result.push_str(line);
-                result.push('\n');
-            }
-        }
-
-        Ok(result)
-    }
-
-    /// 应用分离式高亮
-    fn apply_separate_highlighting(
-        &self,
-        content: &str,
-        highlighted_lines: &[u32],
-    ) -> Result<String> {
-        let lines: Vec<&str> = content.lines().collect();
-        let mut result = String::new();
-        let mut highlighted_content = String::new();
-
-        // 先添加完整内容
-        result.push_str(content);
-        result.push_str("\n\n");
-
-        // 然后添加高亮部分
-        result.push_str("// Highlighted changes:\n");
-        for &line_number in highlighted_lines {
-            if let Some(line) = lines.get((line_number - 1) as usize) {
-                highlighted_content.push_str(&format!("// Line {line_number}: {line}\n"));
-            }
-        }
-
-        result.push_str(&highlighted_content);
-        Ok(result)
-    }
 }
 
 impl CodeSlice {
-    /// 获取格式化后的内容
+    /// 获取格式化后的内容（不包含高亮，高亮由 formatter 处理）
     pub fn get_formatted_content(&self, formatter: &CodeFormatter) -> Result<String> {
-        formatter.apply_syntax_highlighting(&self.content, &self.highlighted_lines)
+        formatter.format_content(&self.content)
     }
 
     /// 获取统计信息

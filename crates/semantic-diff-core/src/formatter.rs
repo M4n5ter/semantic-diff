@@ -184,14 +184,9 @@ impl OutputRenderer {
         output.push_str(&code_slice.header_comment);
         output.push('\n');
 
-        // 使用 CodeSlice 的格式化方法
-        let formatter = crate::generator::CodeFormatter::new(
-            self.config.output_format.clone(),
-            self.config.highlight_style.clone(),
-        );
-        let formatted_content = code_slice.get_formatted_content(&formatter)?;
-
-        output.push_str(&formatted_content);
+        // 使用内置的高亮方法处理内容
+        let highlighted_content = self.apply_highlighting_plain_text(code_slice)?;
+        output.push_str(&highlighted_content);
 
         Ok(output)
     }
@@ -229,16 +224,12 @@ impl OutputRenderer {
         );
         output.push_str("\n\n");
 
-        // 使用 CodeSlice 的格式化方法
-        let formatter = crate::generator::CodeFormatter::new(
-            OutputFormat::Markdown,
-            self.config.highlight_style.clone(),
-        );
-        let formatted_content = code_slice.get_formatted_content(&formatter)?;
+        // 使用内置的高亮方法处理内容
+        let highlighted_content = self.apply_highlighting_markdown(code_slice)?;
 
         // 将格式化内容包装在代码块中
         output.push_str("```go\n");
-        output.push_str(&formatted_content);
+        output.push_str(&highlighted_content);
         output.push_str("\n```\n");
 
         Ok(output)
@@ -303,17 +294,11 @@ impl OutputRenderer {
         let escaped_comment = html_escape(&code_slice.header_comment);
         output.push_str(&format!("            <div class=\"header-comment\">\n                <pre>{escaped_comment}</pre>\n            </div>\n"));
 
-        // 使用 CodeSlice 的格式化方法
-        let formatter = crate::generator::CodeFormatter::new(
-            OutputFormat::Html,
-            self.config.highlight_style.clone(),
-        );
-        let formatted_content = code_slice.get_formatted_content(&formatter)?;
+        // 使用内置的高亮方法处理内容
+        let highlighted_content = self.apply_highlighting_html(code_slice)?;
 
         output.push_str("            <div class=\"code-block\">\n");
-        output.push_str("                <pre><code class=\"language-go\">");
-        output.push_str(&html_escape(&formatted_content));
-        output.push_str("</code></pre>\n");
+        output.push_str(&highlighted_content);
         output.push_str("            </div>\n");
         output.push_str("        </div>\n");
 
@@ -325,55 +310,54 @@ impl OutputRenderer {
     }
 
     /// 应用纯文本高亮
-    fn apply_highlighting_plain_text(
-        &self,
-        content: &str,
-        highlighted_lines: &[u32],
-    ) -> Result<String> {
+    fn apply_highlighting_plain_text(&self, code_slice: &CodeSlice) -> Result<String> {
         match self.config.highlight_style {
-            HighlightStyle::None => Ok(self.format_with_line_numbers(content)),
-            HighlightStyle::Inline => {
-                self.apply_inline_highlighting_plain_text(content, highlighted_lines)
-            }
-            HighlightStyle::Separate => {
-                self.apply_separate_highlighting_plain_text(content, highlighted_lines)
-            }
+            HighlightStyle::None => Ok(code_slice.content.clone()),
+            HighlightStyle::Inline => self.apply_inline_highlighting_plain_text(code_slice),
+            HighlightStyle::Separate => self.apply_separate_highlighting_plain_text(code_slice),
         }
     }
 
     /// 应用内联高亮（纯文本）
-    fn apply_inline_highlighting_plain_text(
-        &self,
-        content: &str,
-        highlighted_lines: &[u32],
-    ) -> Result<String> {
-        let lines: Vec<&str> = content.lines().collect();
+    fn apply_inline_highlighting_plain_text(&self, code_slice: &CodeSlice) -> Result<String> {
+        let lines: Vec<&str> = code_slice.content.lines().collect();
         let mut result = String::new();
-        let color_theme = ColorTheme::default();
 
         for (index, line) in lines.iter().enumerate() {
             let line_number = (index + 1) as u32;
-            let is_highlighted = highlighted_lines.contains(&line_number);
-
-            if self.config.show_line_numbers {
-                if self.config.enable_colors {
-                    result.push_str(&format!(
-                        "{}{:4}|\x1b[0m ",
-                        color_theme.line_number, line_number
-                    ));
-                } else {
-                    result.push_str(&format!("{line_number:4}| "));
-                }
-            }
+            let is_highlighted = code_slice.highlighted_lines.contains(&line_number);
 
             if is_highlighted {
+                // 获取变更类型并显示相应的前缀
+                let change_prefix =
+                    if let Some(change_type) = code_slice.line_change_types.get(&line_number) {
+                        match change_type {
+                            crate::git::DiffLineType::Added => "+",
+                            crate::git::DiffLineType::Removed => "-",
+                            crate::git::DiffLineType::Context => ">",
+                        }
+                    } else {
+                        ">"
+                    };
+
                 if self.config.enable_colors {
-                    result.push_str(&format!("{}> {line}\x1b[0m\n", color_theme.added_line));
+                    let color = match change_prefix {
+                        "+" => "\x1b[32m", // 绿色用于添加
+                        "-" => "\x1b[31m", // 红色用于删除
+                        _ => "\x1b[33m",   // 黄色用于其他变更
+                    };
+                    result.push_str(&format!("{color}{change_prefix} {line}\x1b[0m\n"));
                 } else {
-                    result.push_str(&format!("> {line}\n"));
+                    result.push_str(&format!("{change_prefix} {line}\n"));
+                }
+            } else if self.config.show_line_numbers {
+                if self.config.enable_colors {
+                    result.push_str(&format!("\x1b[36m{line_number:4}|\x1b[0m {line}\n"));
+                } else {
+                    result.push_str(&format!("{line_number:4}| {line}\n"));
                 }
             } else {
-                result.push_str(&format!("  {line}\n"));
+                result.push_str(&format!("{line}\n"));
             }
         }
 
@@ -381,34 +365,41 @@ impl OutputRenderer {
     }
 
     /// 应用分离式高亮（纯文本）
-    fn apply_separate_highlighting_plain_text(
-        &self,
-        content: &str,
-        highlighted_lines: &[u32],
-    ) -> Result<String> {
+    fn apply_separate_highlighting_plain_text(&self, code_slice: &CodeSlice) -> Result<String> {
+        let lines: Vec<&str> = code_slice.content.lines().collect();
         let mut result = String::new();
 
-        // 先显示完整内容
+        // 添加完整内容
         result.push_str("=== Full Content ===\n");
-        result.push_str(&self.format_with_line_numbers(content));
+        result.push_str(&code_slice.content);
         result.push_str("\n\n");
 
-        // 然后显示高亮部分
-        if !highlighted_lines.is_empty() {
-            result.push_str("=== Highlighted Changes ===\n");
-            let lines: Vec<&str> = content.lines().collect();
-            let color_theme = ColorTheme::default();
-
-            for &line_number in highlighted_lines {
-                if let Some(line) = lines.get((line_number - 1) as usize) {
-                    if self.config.enable_colors {
-                        result.push_str(&format!(
-                            "{}Line {line_number}: {line}\x1b[0m\n",
-                            color_theme.added_line
-                        ));
+        // 添加高亮部分
+        result.push_str("=== Highlighted Changes ===\n");
+        for &line_number in &code_slice.highlighted_lines {
+            if let Some(line) = lines.get((line_number - 1) as usize) {
+                let change_prefix =
+                    if let Some(change_type) = code_slice.line_change_types.get(&line_number) {
+                        match change_type {
+                            crate::git::DiffLineType::Added => "+ ",
+                            crate::git::DiffLineType::Removed => "- ",
+                            crate::git::DiffLineType::Context => "> ",
+                        }
                     } else {
-                        result.push_str(&format!("Line {line_number}: {line}\n"));
-                    }
+                        "> "
+                    };
+
+                if self.config.enable_colors {
+                    let color = match change_prefix.trim() {
+                        "+" => "\x1b[32m", // 绿色用于添加
+                        "-" => "\x1b[31m", // 红色用于删除
+                        _ => "\x1b[33m",   // 黄色用于其他变更
+                    };
+                    result.push_str(&format!(
+                        "{color}Line {line_number}: {change_prefix}{line}\x1b[0m\n"
+                    ));
+                } else {
+                    result.push_str(&format!("Line {line_number}: {change_prefix}{line}\n"));
                 }
             }
         }
@@ -417,40 +408,38 @@ impl OutputRenderer {
     }
 
     /// 应用Markdown高亮
-    fn apply_highlighting_markdown(
-        &self,
-        content: &str,
-        highlighted_lines: &[u32],
-    ) -> Result<String> {
+    fn apply_highlighting_markdown(&self, code_slice: &CodeSlice) -> Result<String> {
         match self.config.highlight_style {
-            HighlightStyle::None => Ok(format!("```go\n{content}\n```\n")),
-            HighlightStyle::Inline => {
-                self.apply_inline_highlighting_markdown(content, highlighted_lines)
-            }
-            HighlightStyle::Separate => {
-                self.apply_separate_highlighting_markdown(content, highlighted_lines)
-            }
+            HighlightStyle::None => Ok(format!("```go\n{}\n```\n", code_slice.content)),
+            HighlightStyle::Inline => self.apply_inline_highlighting_markdown(code_slice),
+            HighlightStyle::Separate => self.apply_separate_highlighting_markdown(code_slice),
         }
     }
 
     /// 应用内联高亮（Markdown）
-    fn apply_inline_highlighting_markdown(
-        &self,
-        content: &str,
-        highlighted_lines: &[u32],
-    ) -> Result<String> {
-        let lines: Vec<&str> = content.lines().collect();
+    fn apply_inline_highlighting_markdown(&self, code_slice: &CodeSlice) -> Result<String> {
+        let lines: Vec<&str> = code_slice.content.lines().collect();
         let mut result = String::new();
 
         result.push_str("```go\n");
 
         for (index, line) in lines.iter().enumerate() {
             let line_number = (index + 1) as u32;
-            let is_highlighted = highlighted_lines.contains(&line_number);
+            let is_highlighted = code_slice.highlighted_lines.contains(&line_number);
 
             if is_highlighted {
-                // 在Markdown中，我们使用注释来标记高亮行
-                result.push_str(&format!("// >>> CHANGED: {line}\n"));
+                // 在Markdown中，我们使用注释来标记高亮行，显示变更类型
+                let change_prefix =
+                    if let Some(change_type) = code_slice.line_change_types.get(&line_number) {
+                        match change_type {
+                            crate::git::DiffLineType::Added => "// +++ ",
+                            crate::git::DiffLineType::Removed => "// --- ",
+                            crate::git::DiffLineType::Context => "// >>> ",
+                        }
+                    } else {
+                        "// >>> "
+                    };
+                result.push_str(&format!("{change_prefix}{line}\n"));
             } else {
                 result.push_str(&format!("{line}\n"));
             }
@@ -462,67 +451,80 @@ impl OutputRenderer {
     }
 
     /// 应用分离式高亮（Markdown）
-    fn apply_separate_highlighting_markdown(
-        &self,
-        content: &str,
-        highlighted_lines: &[u32],
-    ) -> Result<String> {
+    fn apply_separate_highlighting_markdown(&self, code_slice: &CodeSlice) -> Result<String> {
+        let lines: Vec<&str> = code_slice.content.lines().collect();
         let mut result = String::new();
 
-        // 完整代码块
+        // 添加完整代码部分
         result.push_str("### Full Code\n\n");
         result.push_str("```go\n");
-        result.push_str(content);
+        result.push_str(&code_slice.content);
         result.push_str("\n```\n\n");
 
-        // 高亮变更
-        if !highlighted_lines.is_empty() {
-            result.push_str("### Highlighted Changes\n\n");
-            let lines: Vec<&str> = content.lines().collect();
-
-            for &line_number in highlighted_lines {
-                if let Some(line) = lines.get((line_number - 1) as usize) {
-                    result.push_str(&format!("**Line {line_number}:** `{line}`\n\n"));
-                }
+        // 添加高亮部分
+        result.push_str("### Highlighted Changes\n\n");
+        result.push_str("```diff\n");
+        for &line_number in &code_slice.highlighted_lines {
+            if let Some(line) = lines.get((line_number - 1) as usize) {
+                let change_prefix =
+                    if let Some(change_type) = code_slice.line_change_types.get(&line_number) {
+                        match change_type {
+                            crate::git::DiffLineType::Added => "+",
+                            crate::git::DiffLineType::Removed => "-",
+                            crate::git::DiffLineType::Context => " ",
+                        }
+                    } else {
+                        "+"
+                    };
+                result.push_str(&format!("{change_prefix}{line}\n"));
             }
         }
+        result.push_str("```\n");
 
         Ok(result)
     }
 
     /// 应用HTML高亮
-    fn apply_highlighting_html(&self, content: &str, highlighted_lines: &[u32]) -> Result<String> {
-        let lines: Vec<&str> = content.lines().collect();
+    fn apply_highlighting_html(&self, code_slice: &CodeSlice) -> Result<String> {
+        let lines: Vec<&str> = code_slice.content.lines().collect();
         let mut result = String::new();
 
-        result.push_str("                <pre><code class=\"language-go\">\n");
+        result.push_str("<pre><code class=\"language-go\">\n");
 
         for (index, line) in lines.iter().enumerate() {
             let line_number = (index + 1) as u32;
-            let is_highlighted = highlighted_lines.contains(&line_number);
-            let escaped_line = html_escape(line);
-
-            let line_class = if is_highlighted {
-                "highlighted-line"
-            } else {
-                "normal-line"
-            };
+            let is_highlighted = code_slice.highlighted_lines.contains(&line_number);
 
             if self.config.show_line_numbers {
                 result.push_str(&format!(
-                    "                    <span class=\"line-wrapper {line_class}\">\
-                     <span class=\"line-number\">{line_number:4}</span>\
-                     <span class=\"line-content\">{escaped_line}</span>\
-                     </span>\n"
+                    "<span class=\"line-number\">{line_number:4}</span>"
+                ));
+            }
+
+            if is_highlighted {
+                let (css_class, change_prefix) =
+                    if let Some(change_type) = code_slice.line_change_types.get(&line_number) {
+                        match change_type {
+                            crate::git::DiffLineType::Added => ("added-line", "+"),
+                            crate::git::DiffLineType::Removed => ("removed-line", "-"),
+                            crate::git::DiffLineType::Context => ("highlighted-line", " "),
+                        }
+                    } else {
+                        ("highlighted-line", ">")
+                    };
+
+                result.push_str(&format!(
+                    "<span class=\"{}\"><span class=\"change-prefix\">{}</span>{}</span>\n",
+                    css_class,
+                    change_prefix,
+                    html_escape(line)
                 ));
             } else {
-                result.push_str(&format!(
-                    "                    <span class=\"line-wrapper {line_class}\">{escaped_line}</span>\n"
-                ));
+                result.push_str(&format!("{}\n", html_escape(line)));
             }
         }
 
-        result.push_str("                </code></pre>\n");
+        result.push_str("</code></pre>\n");
 
         Ok(result)
     }
@@ -582,32 +584,6 @@ impl OutputRenderer {
             stats.constants_count,
             stats.variables_count
         )
-    }
-
-    /// 添加行号格式化
-    fn format_with_line_numbers(&self, content: &str) -> String {
-        if !self.config.show_line_numbers {
-            return content.to_string();
-        }
-
-        let lines: Vec<&str> = content.lines().collect();
-        let mut result = String::new();
-        let color_theme = ColorTheme::default();
-
-        for (index, line) in lines.iter().enumerate() {
-            let line_number = (index + 1) as u32;
-
-            if self.config.enable_colors {
-                result.push_str(&format!(
-                    "{}{line_number:4}|\x1b[0m {line}\n",
-                    color_theme.line_number
-                ));
-            } else {
-                result.push_str(&format!("{line_number:4}| {line}\n"));
-            }
-        }
-
-        result
     }
 
     /// 生成输出元数据

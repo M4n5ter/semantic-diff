@@ -3,6 +3,7 @@
 use super::*;
 use crate::generator::CodeSlice;
 use crate::parser::{GoFunctionInfo, GoParameter, GoType};
+
 use std::path::PathBuf;
 use tempfile::tempdir;
 
@@ -39,6 +40,7 @@ fn create_test_code_slice() -> CodeSlice {
         variables: vec!["var TestVar string".to_string()],
         highlighted_lines: vec![11],
         line_mapping: [(11, 5)].iter().cloned().collect(),
+        line_change_types: [(11, crate::git::DiffLineType::Context)].iter().cloned().collect(),
         involved_files: vec![PathBuf::from("test.go")],
         content: "// Test code slice\n// Generated for testing\n\nimport \"fmt\"\n\ntype TestStruct struct {\n    Field string\n}\n\nconst TestConst = \"test\"\n\nvar TestVar string\n\nfunc TestFunction(param1 string) error {\n    return nil\n}".to_string(),
         dependency_graph: None,
@@ -402,6 +404,7 @@ fn test_empty_code_slice() {
         variables: vec![],
         highlighted_lines: vec![],
         line_mapping: std::collections::HashMap::new(),
+        line_change_types: std::collections::HashMap::new(),
         involved_files: vec![],
         content: String::new(),
         dependency_graph: None,
@@ -428,7 +431,7 @@ fn test_markdown_highlighting_styles() {
     };
     let renderer = OutputRenderer::new(config);
     let result = renderer.render(&code_slice).unwrap();
-    assert!(result.content.contains("// >>> CHANGED:"));
+    assert!(result.content.contains("// >>>"));
 
     // 分离式高亮
     let config = FormatterConfig {
@@ -463,4 +466,201 @@ fn test_color_output_control() {
     let renderer = OutputRenderer::new(config);
     let result = renderer.render(&code_slice).unwrap();
     assert!(!result.content.contains("\x1b["));
+}
+
+#[test]
+fn test_apply_highlighting_plain_text_inline() {
+    let config = FormatterConfig {
+        output_format: OutputFormat::PlainText,
+        highlight_style: HighlightStyle::Inline,
+        enable_colors: false, // 禁用颜色以便测试
+        ..Default::default()
+    };
+    let renderer = OutputRenderer::new(config);
+
+    // 创建测试用的 CodeSlice
+    let mut code_slice = create_test_code_slice();
+    code_slice.content = "line 1\nline 2\nline 3".to_string();
+    code_slice.highlighted_lines = vec![2];
+    code_slice
+        .line_change_types
+        .insert(2, crate::git::DiffLineType::Added);
+
+    let result = renderer.apply_highlighting_plain_text(&code_slice);
+    assert!(
+        result.is_ok(),
+        "apply_highlighting_plain_text should succeed"
+    );
+
+    let highlighted = result.unwrap();
+    // 检查高亮功能是否正常工作（现在应该显示 + 前缀）
+    assert!(
+        highlighted.contains("+ line 2"),
+        "Second line should be highlighted with + prefix"
+    );
+    assert!(highlighted.contains("line 1"), "Should contain first line");
+    assert!(highlighted.contains("line 3"), "Should contain third line");
+}
+
+#[test]
+fn test_apply_highlighting_plain_text_separate() {
+    let config = FormatterConfig {
+        output_format: OutputFormat::PlainText,
+        highlight_style: HighlightStyle::Separate,
+        ..Default::default()
+    };
+    let renderer = OutputRenderer::new(config);
+
+    let mut code_slice = create_test_code_slice();
+    code_slice.content = "line 1\nline 2\nline 3".to_string();
+    code_slice.highlighted_lines = vec![2];
+    code_slice
+        .line_change_types
+        .insert(2, crate::git::DiffLineType::Removed);
+
+    let result = renderer.apply_highlighting_plain_text(&code_slice);
+    assert!(
+        result.is_ok(),
+        "apply_highlighting_plain_text should succeed"
+    );
+
+    let highlighted = result.unwrap();
+    assert!(
+        highlighted.contains("=== Full Content ==="),
+        "Should contain full content section"
+    );
+    assert!(
+        highlighted.contains("=== Highlighted Changes ==="),
+        "Should contain highlighted changes section"
+    );
+    assert!(
+        highlighted.contains("Line 2: - line 2"),
+        "Should contain highlighted line info with - prefix"
+    );
+}
+
+#[test]
+fn test_apply_highlighting_markdown_inline() {
+    let config = FormatterConfig {
+        output_format: OutputFormat::Markdown,
+        highlight_style: HighlightStyle::Inline,
+        ..Default::default()
+    };
+    let renderer = OutputRenderer::new(config);
+
+    let mut code_slice = create_test_code_slice();
+    code_slice.content = "line 1\nline 2\nline 3".to_string();
+    code_slice.highlighted_lines = vec![2];
+    code_slice
+        .line_change_types
+        .insert(2, crate::git::DiffLineType::Added);
+
+    let result = renderer.apply_highlighting_markdown(&code_slice);
+    assert!(result.is_ok(), "apply_highlighting_markdown should succeed");
+
+    let highlighted = result.unwrap();
+    assert!(
+        highlighted.contains("```go"),
+        "Should start with Go code block"
+    );
+    assert!(
+        highlighted.contains("// +++ line 2"),
+        "Should highlight line 2 with +++ comment"
+    );
+    assert!(
+        highlighted.contains("line 1\n"),
+        "Should contain unchanged line 1"
+    );
+    assert!(
+        highlighted.contains("line 3"),
+        "Should contain unchanged line 3"
+    );
+}
+
+#[test]
+fn test_apply_highlighting_html() {
+    let config = FormatterConfig {
+        output_format: OutputFormat::Html,
+        highlight_style: HighlightStyle::Inline,
+        ..Default::default()
+    };
+    let renderer = OutputRenderer::new(config);
+
+    let mut code_slice = create_test_code_slice();
+    code_slice.content = "line 1\nline 2\nline 3".to_string();
+    code_slice.highlighted_lines = vec![2];
+    code_slice
+        .line_change_types
+        .insert(2, crate::git::DiffLineType::Added);
+
+    let result = renderer.apply_highlighting_html(&code_slice);
+    assert!(result.is_ok(), "apply_highlighting_html should succeed");
+
+    let highlighted = result.unwrap();
+    assert!(
+        highlighted.contains("<pre><code class=\"language-go\">"),
+        "Should start with HTML code block"
+    );
+    assert!(
+        highlighted.contains("added-line"),
+        "Should have added-line class"
+    );
+    assert!(
+        highlighted.contains("change-prefix"),
+        "Should have change prefix span"
+    );
+}
+
+#[test]
+fn test_highlighting_with_no_highlighted_lines() {
+    let config = FormatterConfig {
+        output_format: OutputFormat::PlainText,
+        highlight_style: HighlightStyle::Inline,
+        ..Default::default()
+    };
+    let renderer = OutputRenderer::new(config);
+
+    let mut code_slice = create_test_code_slice();
+    code_slice.content = "line 1\nline 2\nline 3".to_string();
+    code_slice.highlighted_lines = vec![]; // 没有高亮行
+
+    let result = renderer.apply_highlighting_plain_text(&code_slice);
+    assert!(result.is_ok(), "Should handle empty highlighted lines");
+
+    let highlighted = result.unwrap();
+    assert!(
+        !highlighted.contains("+") && !highlighted.contains("-"),
+        "Should not contain change markers"
+    );
+}
+
+#[test]
+fn test_highlighting_with_colors_disabled() {
+    let config = FormatterConfig {
+        output_format: OutputFormat::PlainText,
+        highlight_style: HighlightStyle::Inline,
+        enable_colors: false,
+        ..Default::default()
+    };
+    let renderer = OutputRenderer::new(config);
+
+    let mut code_slice = create_test_code_slice();
+    code_slice.content = "line 1\nline 2\nline 3".to_string();
+    code_slice.highlighted_lines = vec![2];
+    code_slice
+        .line_change_types
+        .insert(2, crate::git::DiffLineType::Removed);
+
+    let result = renderer.apply_highlighting_plain_text(&code_slice);
+    assert!(result.is_ok(), "Should work with colors disabled");
+
+    let highlighted = result.unwrap();
+    assert!(
+        !highlighted.contains("\x1b["),
+        "Should not contain ANSI color codes"
+    );
+    assert!(
+        highlighted.contains("- line 2"),
+        "Should contain - prefix for removed line"
+    );
 }

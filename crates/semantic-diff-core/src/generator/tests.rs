@@ -221,7 +221,7 @@ fn test_highlight_changes() {
 
 #[test]
 fn test_code_formatter_plain_text() {
-    let formatter = CodeFormatter::new(OutputFormat::PlainText, HighlightStyle::None);
+    let formatter = CodeFormatter::new(OutputFormat::PlainText);
     let content = "package main\n\nfunc main() {\n    fmt.Println(\"Hello\")\n}";
 
     let result = formatter.format_content(content);
@@ -233,27 +233,23 @@ fn test_code_formatter_plain_text() {
 
 #[test]
 fn test_code_formatter_markdown() {
-    let formatter = CodeFormatter::new(OutputFormat::Markdown, HighlightStyle::None);
+    let formatter = CodeFormatter::new(OutputFormat::Markdown);
     let content = "package main\n\nfunc main() {}";
 
     let result = formatter.format_content(content);
     assert!(result.is_ok(), "format_content should succeed");
 
     let formatted = result.unwrap();
-    assert!(
-        formatted.starts_with("```go\n"),
-        "Should start with Go code block"
-    );
-    assert!(formatted.ends_with("```\n"), "Should end with code block");
-    assert!(
-        formatted.contains(content),
-        "Should contain original content"
+    // 注意：format_markdown 现在只返回内容本身，代码块标记由 formatter 处理
+    assert_eq!(
+        formatted, content,
+        "Should return original content without code block markers"
     );
 }
 
 #[test]
 fn test_code_formatter_html() {
-    let formatter = CodeFormatter::new(OutputFormat::Html, HighlightStyle::None);
+    let formatter = CodeFormatter::new(OutputFormat::Html);
     let content = "package main\n\nfunc main() {}";
 
     let result = formatter.format_content(content);
@@ -276,7 +272,7 @@ fn test_code_formatter_html() {
 
 #[test]
 fn test_code_formatter_html_escaping() {
-    let formatter = CodeFormatter::new(OutputFormat::Html, HighlightStyle::None);
+    let formatter = CodeFormatter::new(OutputFormat::Html);
     let content = "if x < y && z > 0 { return \"test\" }";
 
     let result = formatter.format_content(content);
@@ -289,45 +285,7 @@ fn test_code_formatter_html_escaping() {
     assert!(formatted.contains("&quot;"), "Should escape \" character");
 }
 
-#[test]
-fn test_apply_syntax_highlighting_inline() {
-    let formatter = CodeFormatter::new(OutputFormat::PlainText, HighlightStyle::Inline);
-    let content = "line 1\nline 2\nline 3";
-    let highlighted_lines = vec![2];
-
-    let result = formatter.apply_syntax_highlighting(content, &highlighted_lines);
-    assert!(result.is_ok(), "apply_syntax_highlighting should succeed");
-
-    let highlighted = result.unwrap();
-    let lines: Vec<&str> = highlighted.lines().collect();
-    assert_eq!(lines[0], "line 1", "First line should be unchanged");
-    assert_eq!(lines[1], "> line 2", "Second line should be highlighted");
-    assert_eq!(lines[2], "line 3", "Third line should be unchanged");
-}
-
-#[test]
-fn test_apply_syntax_highlighting_separate() {
-    let formatter = CodeFormatter::new(OutputFormat::PlainText, HighlightStyle::Separate);
-    let content = "line 1\nline 2\nline 3";
-    let highlighted_lines = vec![2];
-
-    let result = formatter.apply_syntax_highlighting(content, &highlighted_lines);
-    assert!(result.is_ok(), "apply_syntax_highlighting should succeed");
-
-    let highlighted = result.unwrap();
-    assert!(
-        highlighted.contains(content),
-        "Should contain original content"
-    );
-    assert!(
-        highlighted.contains("// Highlighted changes:"),
-        "Should contain highlight section"
-    );
-    assert!(
-        highlighted.contains("// Line 2: line 2"),
-        "Should contain highlighted line info"
-    );
-}
+// 注意：高亮功能测试已移至 formatter/tests.rs，因为高亮现在由 OutputRenderer 处理
 
 #[test]
 fn test_code_slice_stats() {
@@ -457,49 +415,6 @@ fn test_should_highlight_line() {
 }
 
 #[test]
-fn test_should_highlight_change() {
-    let generator = CodeSliceGenerator::new();
-
-    // 测试应该被高亮的重要变更
-    assert!(
-        generator.should_highlight_change("case anthropic.ThinkingDelta:"),
-        "Should highlight ThinkingDelta case"
-    );
-    assert!(
-        generator.should_highlight_change("Reasoning: Some(deltaVariant.JSON.Thinking.Raw()),"),
-        "Should highlight Reasoning assignment"
-    );
-    assert!(
-        generator.should_highlight_change("// 只有当有实际内容时才发送 chunk"),
-        "Should highlight important comment"
-    );
-    assert!(
-        generator.should_highlight_change(
-            "if len(chunk.ContentParts) > 0 || chunk.Reasoning.IsSome() {"
-        ),
-        "Should highlight condition with ContentParts"
-    );
-
-    // 测试不应该被高亮的通用内容
-    assert!(
-        !generator.should_highlight_change("return"),
-        "Should not highlight simple return"
-    );
-    assert!(
-        !generator.should_highlight_change("}"),
-        "Should not highlight closing brace"
-    );
-    assert!(
-        !generator.should_highlight_change("nil"),
-        "Should not highlight nil"
-    );
-    assert!(
-        !generator.should_highlight_change("x := 1"),
-        "Should not highlight simple assignment"
-    );
-}
-
-#[test]
 fn test_is_significant_change() {
     let generator = CodeSliceGenerator::new();
 
@@ -541,39 +456,6 @@ fn test_is_significant_change() {
     assert!(
         !generator.is_significant_change("x"),
         "Should not consider short content significant"
-    );
-}
-
-#[test]
-fn test_is_unique_enough_for_highlighting() {
-    let generator = CodeSliceGenerator::new();
-
-    // 测试足够独特的内容
-    assert!(
-        generator.is_unique_enough_for_highlighting("case anthropic.ThinkingDelta:"),
-        "Should consider ThinkingDelta unique"
-    );
-    assert!(
-        generator.is_unique_enough_for_highlighting("Reasoning: Some(value)"),
-        "Should consider Reasoning assignment unique"
-    );
-    assert!(
-        generator.is_unique_enough_for_highlighting("// 只有当有实际内容时才发送 chunk"),
-        "Should consider specific comment unique"
-    );
-    assert!(
-        generator.is_unique_enough_for_highlighting("if len(chunk.ContentParts) > 0 {"),
-        "Should consider ContentParts condition unique"
-    );
-
-    // 测试不够独特的内容
-    assert!(
-        !generator.is_unique_enough_for_highlighting("case someValue:"),
-        "Should not consider generic case unique"
-    );
-    assert!(
-        !generator.is_unique_enough_for_highlighting("if x > 0 {"),
-        "Should not consider generic condition unique"
     );
 }
 
